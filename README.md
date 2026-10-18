@@ -41,9 +41,9 @@ sudo chown -R --reference=/etc/komodo/stacks/glance /etc/komodo/stacks/mailsweep
 
 ```bash
 cd /etc/komodo/stacks/mailsweep
-sudo cp -p mailsweep.env.example mailsweep.env
-sudo chmod 600 mailsweep.env
-sudo nano mailsweep.env     # IMAP_USER, IMAP_PASSWORD, UI_PASSWORD setzen
+sudo cp -p mailsweep.env.example .env
+sudo chmod 600 .env
+sudo nano .env              # IMAP_USER, IMAP_PASSWORD, UI_PASSWORD setzen
 ```
 
 `IMAP_USER` ist deine iCloud-Mail-Hauptadresse (bei alten MobileMe-Accounts ggf. `…@me.com`). Schlägt der Login fehl, den Teil vor dem `@` probieren.
@@ -97,7 +97,7 @@ Echter Spam gehört nicht abgemeldet, sondern gelöscht: Ein Abmeldeklick bestä
 
 ## Konfiguration
 
-Die meisten Optionen lassen sich im Tab **Einstellungen** ändern, ohne Neu-Deploy (ab 1.2.0). Werte aus der App überschreiben die Env-Datei. Zugangsdaten und UI-Passwort stehen nur in `mailsweep.env`.
+Die meisten Optionen lassen sich im Tab **Einstellungen** ändern, ohne Neu-Deploy (ab 1.2.0). Werte aus der App überschreiben die Env-Datei. Zugangsdaten und UI-Passwort stehen nur in der Env-Datei `.env` (bei Komodo im Stack-Feld *Environment*, Passwörter als Secret-Variablen).
 
 Alle Optionen stehen kommentiert in `mailsweep.env.example`. Die wichtigsten:
 

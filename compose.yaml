@@ -6,7 +6,7 @@ services:
     pull_policy: build          # lokales Image, nie aus einer Registry ziehen
     container_name: mailsweep
     restart: unless-stopped
-    env_file: mailsweep.env     # bewusst nicht .env, die schreibt Komodo selbst
+    env_file: .env              # schreibt Komodo aus dem Stack-Feld "Environment"; ohne Komodo: cp mailsweep.env.example .env
     ports:
       - "8743:8080"
     volumes:
