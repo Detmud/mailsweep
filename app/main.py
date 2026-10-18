@@ -379,11 +379,12 @@ async def api_action(req: ActionReq):
 class UnsubReq(BaseModel):
     addr: str
     method: Literal["auto", "oneclick", "mailto"] = "auto"
+    dns: Literal["system", "fallback"] = "system"
 
 
 @app.post("/api/unsubscribe", dependencies=[Depends(auth)])
 async def api_unsubscribe(req: UnsubReq):
-    return await asyncio.to_thread(unsubscribe.unsubscribe, req.addr.strip().lower(), req.method)
+    return await asyncio.to_thread(unsubscribe.unsubscribe, req.addr.strip().lower(), req.method, req.dns)
 
 
 class MarkReq(BaseModel):
