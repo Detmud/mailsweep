@@ -236,6 +236,9 @@ dialog h3 { margin: 0 0 10px; font-size: 17px; }
 dialog menu { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 0; margin: 18px 0 0; }
 dialog ul { padding-left: 18px; margin: 8px 0; }
 dialog a { color: var(--accent); word-break: break-all; }
+.unsub-link { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; margin: 10px 0; }
+.unsub-link .lbl { font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+.unsub-link .small { margin: 6px 0 0; }
 
 /* Toasts */
 #toasts { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 40; }

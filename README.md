@@ -93,6 +93,10 @@ Badges in der Liste:
 | DKIM pass | laut Authentication-Results des iCloud-Servers gültig signiert |
 | DKIM fremd | von einer fremden Domain signiert, typisch für Spoofing: nicht abmelden, löschen |
 
+Klappt das Abmelden nicht, zeigt der Dialog, was stattdessen geht: Link selbst öffnen, per Mail abmelden, als abgemeldet markieren oder direkt archivieren bzw. löschen mit Regel.
+
+**DNS-Filter:** Viele Newsletter-Dienste schicken die Abmeldung über Tracking-Domains (z. B. `r.openai.com` über SendGrid). Steht so eine Domain auf der Blockliste deines DNS-Filters, bekommt mailsweep `0.0.0.0` zurück und lehnt aus Sicherheitsgründen ab. Mit „Erneut über DNS 9.9.9.9“ löst mailsweep nur diesen einen Host über den Ausweich-DNS auf. Die Prüfung auf öffentliche Adressen gilt weiter, und die Verbindung geht an genau die geprüfte IP. Welcher Server das ist, stellst du unter Einstellungen ein.
+
 Echter Spam gehört nicht abgemeldet, sondern gelöscht: Ein Abmeldeklick bestätigt dem Spammer nur, dass deine Adresse aktiv ist. mailsweep verweigert das automatische Abmelden bei ungültiger oder fremder Signatur.
 
 ## Konfiguration
@@ -108,6 +112,7 @@ Alle Optionen stehen kommentiert in `mailsweep.env.example`. Die wichtigsten:
 | `SYNC_INTERVAL_MINUTES` | `30` | Abstand der automatischen Syncs, `0` = nur manuell |
 | `DRY_RUN` | `false` | Nur protokollieren, nichts ausführen |
 | `ALLOW_MAILTO_UNSUBSCRIBE` | `true` | Abmelde-Mails über `smtp.mail.me.com` senden |
+| `UNSUB_FALLBACK_DNS` | `9.9.9.9` | Ausweich-DNS, falls dein DNS-Filter eine Abmelde-Domain blockt; nur auf Klick, leer = aus |
 | `FETCH_BATCH` | `250` | Header pro IMAP-Abruf; bei Timeouts verkleinern |
 | `UI_USER` / `UI_PASSWORD` | `admin` / leer | Basic-Auth der Weboberfläche |
 
@@ -122,9 +127,10 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 
 ## Tests
 
-`tests/` enthält einen End-to-End-Test gegen einen echten IMAP-Server (Dovecot). `seed.py` befüllt ein Testpostfach mit DKIM-signierten Newslettern, gefälschten Absendern, kaputten Headern und einem Ordner mit Umlaut. `test_e2e.py` prüft Sync, Gruppierung, DKIM-Prüfung beim Abmelden, Verschieben, Regeln, den Tab „Erledigt“ und den Testmodus.
+`tests/` enthält einen End-to-End-Test gegen einen echten IMAP-Server (Dovecot). `seed.py` befüllt ein Testpostfach mit DKIM-signierten Newslettern, gefälschten Absendern, kaputten Headern und einem Ordner mit Umlaut. `test_e2e.py` prüft Sync, Gruppierung, DKIM-Prüfung beim Abmelden, die Alternativen bei gesperrtem DNS, Verschieben, Regeln, den Tab „Erledigt“ und den Testmodus.
 
 ```bash
+python tests/test_net.py   # ohne Mailserver: DNS-Sperren, Ausweich-DNS, IP-Pinning mit TLS
 python tests/seed.py 127.0.0.1 10143 test@icloud.test geheim /tmp/key.json
 python tests/test_e2e.py /tmp      # erwartet key.json im angegebenen Ordner
 ```

@@ -1,6 +1,7 @@
 """Konfiguration über Umgebungsvariablen; ein Teil davon ist zur Laufzeit in der App änderbar (EDITABLE)."""
 from __future__ import annotations
 
+import ipaddress
 import os
 from dataclasses import dataclass, field
 
@@ -38,6 +39,9 @@ class Settings:
     smtp_port: int = field(default_factory=lambda: int(_env("SMTP_PORT", "587")))
     smtp_from: str = field(default_factory=lambda: _env("SMTP_FROM", "") or "")
     allow_mailto: bool = field(default_factory=lambda: _bool("ALLOW_MAILTO_UNSUBSCRIBE", True))
+    # DNS-Server, über den mailsweep den Abmelde-Host auflöst, wenn der lokale DNS-Filter
+    # ihn blockt. Wird nur auf ausdrücklichen Klick genutzt. Leer = Funktion aus.
+    unsub_fallback_dns: str = field(default_factory=lambda: _env("UNSUB_FALLBACK_DNS", "9.9.9.9") or "")
 
     # Ordner, die analysiert werden. "INBOX" oder kommagetrennt, z.B. "INBOX,Archive"
     folders: list[str] = field(default_factory=lambda: _list("SCAN_FOLDERS", "INBOX"))
@@ -77,6 +81,11 @@ EDITABLE: dict[str, dict] = {
                           "help": "0 = nur manuell über „Jetzt synchronisieren“."},
     "allow_mailto": {"type": "bool", "label": "Abmelden per Mail erlauben",
                      "help": "Sendet Abmelde-Mails über smtp.mail.me.com."},
+    "unsub_fallback_dns": {"type": "str", "validate": "ip", "placeholder": "aus",
+                           "label": "Ausweich-DNS für Abmelden",
+                           "help": "Wenn dein DNS-Filter eine Abmelde-Domain blockt, kannst du die Abmeldung "
+                                   "per Klick über diesen DNS-Server wiederholen. Nur für diesen einen Host, "
+                                   "nur auf Klick. Leer = aus."},
     "archive_folder": {"type": "str", "label": "Archiv-Ordner",
                        "help": "Leer = automatisch erkennen (iCloud: Archive)."},
     "trash_folder": {"type": "str", "label": "Papierkorb-Ordner",
@@ -107,4 +116,10 @@ def coerce(key: str, value):
         if not items:
             raise ValueError(f"{spec['label']}: mindestens ein Ordner")
         return items
-    return str(value or "").strip()
+    s = str(value or "").strip()
+    if s and spec.get("validate") == "ip":
+        try:
+            ipaddress.ip_address(s)
+        except ValueError:
+            raise ValueError(f"{spec['label']}: „{s}“ ist keine IP-Adresse") from None
+    return s

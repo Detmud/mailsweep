@@ -1,5 +1,5 @@
 """End-to-End-Test gegen einen echten IMAP-Server (Dovecot) mit FastAPI-TestClient."""
-import base64, json, os, sys, time, tempfile
+import json, os, sys, time, tempfile
 T = sys.argv[1]
 os.environ.update(IMAP_HOST="127.0.0.1", IMAP_PORT="10143", IMAP_SSL="false", IMAP_USER="test@icloud.test",
                   IMAP_PASSWORD="geheim", SCAN_FOLDERS="INBOX,Newsletter &AMQ-lt", DATA_DIR=tempfile.mkdtemp(),
@@ -11,7 +11,7 @@ from app import main, unsubscribe, jobs
 pub = json.load(open(os.path.join(T, "key.json")))["p"]
 unsubscribe.DNSFUNC = lambda name, timeout=5: f"v=DKIM1; k=rsa; p={pub}".encode()
 calls = []
-unsubscribe.one_click_post = lambda url: (calls.append(("post", url)) or (True, "HTTP 200"))
+unsubscribe.one_click_post = lambda url, nameserver=None: (calls.append(("post", url)) or (True, "HTTP 200"))
 unsubscribe.send_mailto = lambda uri: (calls.append(("mailto", uri)) or (True, "Abmelde-Mail gesendet"))
 
 ok = lambda cond, msg: print(("PASS " if cond else "FAIL ") + msg) or (cond or sys.exit(1))
@@ -55,11 +55,50 @@ with TestClient(main.app) as c:
     # Abmelden
     u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example"}).json()
     ok(u["status"] == "ok" and u["via"] == "oneclick" and calls[-1] == ("post", "https://unsub.shop-a.example/u?id=42"), f"One-Click mit gültigem DKIM ({u.get('message')})")
+    ok(u["alternatives"]["fallback_dns"] is None and u["code"] == "", "Erfolg: kein Ausweich-DNS-Angebot")
+
+    # DNS-Filter blockt den Abmelde-Host: keine Sackgasse, sondern Alternativen (#4)
+    good_post = unsubscribe.one_click_post
+    def blocked_post(url, nameserver=None):
+        calls.append(("post", url, nameserver))
+        if not nameserver:
+            raise unsubscribe.DnsBlocked("Dein DNS-Filter blockiert unsub.shop-a.example (Antwort: 0.0.0.0).")
+        return True, f"HTTP 200, aufgelöst über {nameserver}"
+    unsubscribe.one_click_post = blocked_post
+    u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example"}).json()
+    alt = u["alternatives"]
+    ok(u["status"] == "error" and u["code"] == "dns_blocked" and "DNS-Filter" in u["message"], f"DNS-Filter erkannt ({u['message']})")
+    ok(alt["fallback_dns"] == "9.9.9.9" and alt["mailto"] and alt["url"] == "https://unsub.shop-a.example/u?id=42" and alt["url_verified"],
+       f"Alternativen angeboten ({alt})")
+    u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example", "method": "oneclick", "dns": "fallback"}).json()
+    ok(u["status"] == "ok" and u["via"] == "oneclick" and calls[-1] == ("post", "https://unsub.shop-a.example/u?id=42", "9.9.9.9"),
+       f"Erneut über Ausweich-DNS erfolgreich ({u['message']})")
+    u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example", "method": "mailto"}).json()
+    ok(u["status"] == "ok" and u["via"] == "mailto" and calls[-1][0] == "mailto", "Alternative: per Mail abmelden")
+    c.post("/api/settings", headers=H, json={"values": {"unsub_fallback_dns": ""}})
+    u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example"}).json()
+    ok(u["code"] == "dns_blocked" and u["alternatives"]["fallback_dns"] is None, "Ausweich-DNS aus: kein Angebot, Rest bleibt")
+    u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example", "method": "oneclick", "dns": "fallback"}).json()
+    ok(u["status"] == "error" and u["code"] == "config", "Ausweich-DNS angefordert, aber aus -> klare Meldung")
+    ok(c.post("/api/settings", headers=H, json={"values": {"unsub_fallback_dns": "dns.quad9.net"}}).status_code == 400, "Einstellung: Hostname statt IP -> 400")
+    ok(c.delete("/api/settings/unsub_fallback_dns", headers=H).status_code == 200 and unsubscribe.settings.unsub_fallback_dns == "9.9.9.9",
+       "Einstellung zurückgesetzt auf 9.9.9.9")
+    # Testmodus prüft DNS schon vor dem Scharfschalten
+    unsubscribe.settings.dry_run = True
+    unsubscribe.RESOLVE = lambda host, ns=None: [__import__("ipaddress").ip_address("0.0.0.0")]
+    n = len(calls)
+    u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example"}).json()
+    ok(u["code"] == "dns_blocked" and len(calls) == n and u["message"].startswith("[DRY-RUN]"), "Dry-Run meldet DNS-Sperre ohne POST")
+    unsubscribe.settings.dry_run = False
+    unsubscribe.RESOLVE = unsubscribe._resolve
+    unsubscribe.one_click_post = good_post
+
     u = c.post("/api/unsubscribe", headers=H, json={"addr": "news@mail.verein.example"}).json()
     ok(u["status"] == "ok" and u["via"] == "mailto", f"mailto mit gültigem DKIM ({u.get('message')}, {u['dkim']['detail']})")
     n = len(calls)
     u = c.post("/api/unsubscribe", headers=H, json={"addr": "promo@spoof.example"}).json()
     ok(u["status"] == "manual" and len(calls) == n and "Vorsicht" in u["message"], f"Spoof: kein automatischer POST ({u['status']}: {u['message']})")
+    ok(not u["alternatives"]["url_verified"] and not u["alternatives"]["mailto"], "Spoof: Link als unbestätigt markiert, keine Mail-Abmeldung")
     u = c.post("/api/unsubscribe", headers=H, json={"addr": "info@linkonly.example"}).json()
     ok(u["status"] == "manual" and u["url"].startswith("https://linkonly"), "Nur-Link -> manuell")
     u = c.post("/api/unsubscribe", headers=H, json={"addr": "anna@private.example"}).json()
