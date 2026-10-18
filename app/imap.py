@@ -127,25 +127,47 @@ def _safe_header(msg, name: str) -> str:
             return ""
 
 
-def _parse_auth_results(msg, from_org: str) -> tuple[str, str]:
-    """Wertet den obersten Authentication-Results-Header aus (den setzt der empfangende Server)."""
-    values = []
-    # iCloud setzt je nach Weg nur ARC-Authentication-Results; der oberste Eintrag stammt vom eigenen Server.
+_ARC_INSTANCE_RE = re.compile(r"^\s*i\s*=\s*\d+\s*;", re.I)
+
+
+def authserv_id(value: str) -> str:
+    """authserv-id eines (ARC-)Authentication-Results-Werts, z. B. 'dkim-verifier.icloud.com'."""
+    v = _ARC_INSTANCE_RE.sub("", " ".join(str(value).split()))
+    return v.split(";", 1)[0].strip().split(" ", 1)[0].lower()
+
+
+def is_trusted_authserv(aid: str) -> bool:
+    return any(aid == t or aid.endswith("." + t) for t in settings.trusted_authserv if t)
+
+
+def auth_result_headers(msg) -> tuple[str, list[str]]:
+    """Wählt die Header, deren DKIM-Ergebnis zählt: (Headername, [Werte]).
+
+    iCloud setzt pro Prüfung einen eigenen Header (bimi, dmarc, dkim-verifier, spf ...). Gewertet werden
+    alle mit vertrauenswürdiger authserv-id. Gibt es keinen, gilt wie bisher der oberste Header, den der
+    empfangende Server zuletzt gesetzt hat. Erst danach ARC-Authentication-Results.
+    """
     for hname in ("Authentication-Results", "ARC-Authentication-Results"):
         try:
-            values = msg.get_all(hname) or []
+            values = [str(v) for v in (msg.get_all(hname) or [])]
         except Exception:
             values = []
-        if values:
-            break
-    if not values:
-        return "", ""
-    top = str(values[0])
+        if not values:
+            continue
+        trusted = [v for v in values if is_trusted_authserv(authserv_id(v))]
+        return hname, trusted or values[:1]
+    return "", []
+
+
+def _parse_auth_results(msg, from_org: str) -> tuple[str, str]:
+    """DKIM-Ergebnis laut Mailserver: pass | pass-unaligned | fail | none | ... und signierende Domain."""
+    _, values = auth_result_headers(msg)
     results = []
-    for m in _DKIM_AR_RE.finditer(top):
-        res = m.group(1).lower()
-        dm = _HEADER_D_RE.search(m.group(2))
-        results.append((res, dm.group(1).lower() if dm else ""))
+    for value in values:
+        for m in _DKIM_AR_RE.finditer(value):
+            res = m.group(1).lower()
+            dm = _HEADER_D_RE.search(m.group(2))
+            results.append((res, dm.group(1).lower() if dm else ""))
     if not results:
         return "", ""
     for res, dom in results:
@@ -155,6 +177,10 @@ def _parse_auth_results(msg, from_org: str) -> tuple[str, str]:
         if res == "pass":
             return "pass-unaligned", dom
     return results[0]
+
+
+def parse_header_block(raw: bytes):
+    return _parser.parsebytes(raw or b"", headersonly=True)
 
 
 def parse_headers(uid: int, size: int, internaldate: int, raw: bytes) -> HeaderInfo:
@@ -388,6 +414,16 @@ class Imap:
                 if literal:
                     return literal
         raise ImapError(f"Mail UID {uid} in {folder!r} nicht abrufbar")
+
+    def fetch_header_fields(self, folder: str, uid: int, fields: str) -> bytes:
+        """Holt ausgewählte Header einer Mail (ohne Inhalt, ohne \\Seen zu setzen)."""
+        self.select(folder, readonly=True)
+        typ, data = self.c.uid("FETCH", str(uid), f"(BODY.PEEK[HEADER.FIELDS ({fields})])")
+        if typ == "OK":
+            for _meta, literal in split_fetch_response(data):
+                if literal is not None:
+                    return literal
+        raise ImapError(f"Header von UID {uid} in {folder!r} nicht abrufbar")
 
     def move(self, folder: str, uids: list[int], target: str) -> int:
         """Verschiebt UIDs. Löscht nie endgültig außerhalb des Quellordners."""
