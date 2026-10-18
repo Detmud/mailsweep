@@ -342,45 +342,82 @@ async function doBulkRule(action) {
 }
 
 async function doUnsubscribe(addr) {
-  const row = S.rows.find(r => r.key === addr) || {};
   const confirmV = await dialog("Abmelden",
     [h("p", {}, "Von ", h("strong", {}, addr), " abmelden?"),
      h("p", { class: "muted" }, "mailsweep lädt die neueste Mail dieses Absenders, prüft die DKIM-Signatur und meldet nur ab, wenn sie gültig ist, zum Absender passt und den Abmelde-Header abdeckt.")],
     [["Abbrechen", "", "ghost"], ["Abmelden", "ok"]]);
   if (confirmV !== "ok") return;
-  toast("Prüfe Signatur und melde ab …");
-  let r;
-  try { r = await api("/api/unsubscribe", { method: "POST", body: { addr, method: "auto" } }); }
-  catch (e) { toast(e.message, true); return; }
 
+  let req = { addr, method: "auto", dns: "system" };
+  toast("Prüfe Signatur und melde ab …");
+  // Schleife: Nach einem Fehler bietet der Dialog Alternativen an, die direkt neu versuchen.
+  for (;;) {
+    let r;
+    try { r = await api("/api/unsubscribe", { method: "POST", body: req }); }
+    catch (e) { toast(e.message, true); return; }
+    const v = await unsubResultDialog(addr, r);
+    if (v === "fallback") {
+      req = { addr, method: "oneclick", dns: "fallback" };
+      toast(`Versuche erneut, Auflösung über ${r.alternatives.fallback_dns} …`);
+      continue;
+    }
+    if (v === "mailto") {
+      req = { addr, method: "mailto", dns: "system" };
+      toast("Sende Abmelde-Mail …");
+      continue;
+    }
+    if (v === "mark") {
+      try {
+        await api("/api/unsubscribe/mark", { method: "POST", body: { addr, done: true } });
+        toast("Als abgemeldet markiert");
+      } catch (e) { toast(e.message, true); }
+    } else if (v === "archive" || v === "trash") {
+      try {
+        const rr = await createRule("addr", addr, v);
+        toast(`Regel angelegt, ${nf.format(rr.moved)} Mails verschoben`);
+      } catch (e) { toast(e.message, true); }
+      loadStatus();
+    }
+    loadSenders(true, true);
+    return;
+  }
+}
+
+function unsubResultDialog(addr, r) {
+  const row = S.rows.find(x => x.key === addr) || {};
+  const alt = r.alternatives || {};
   const details = (r.dkim && r.dkim.detail) || [];
+  const failed = r.status !== "ok" && r.status !== "manual";
   const body = [];
+
   if (r.status === "ok") body.push(h("p", {}, h("span", { class: "badge ok" }, r.via === "mailto" ? "per Mail" : "One-Click"), " ", r.message));
-  else if (r.status === "manual") {
-    body.push(h("p", {}, r.message));
-    const url = safeUrl(r.url);
-    if (url) body.push(h("p", {}, h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, url)));
-  } else body.push(h("p", {}, h("span", { class: "badge err" }, r.status === "refused" ? "abgelehnt" : "Fehler"), " ", r.message));
+  else if (r.status === "manual") body.push(h("p", {}, r.message));
+  else body.push(h("p", {}, h("span", { class: "badge err" }, r.status === "refused" ? "abgelehnt" : "Fehler"), " ", r.message));
+
+  if (failed && r.code === "dkim")
+    body.push(h("p", { class: "hint warn" }, "Ohne gültige Signatur kann das Spam sein. Spam nicht abmelden, sondern löschen: Ein Abmeldeklick bestätigt nur, dass deine Adresse aktiv ist."));
+
+  const url = safeUrl(alt.url || r.url);
+  if (url && (r.status === "manual" || failed)) {
+    const note = [];
+    if (!alt.url_verified) note.push("Signatur nicht bestätigt, nur öffnen, wenn du dem Absender traust.");
+    if (r.code === "dns_blocked" || r.code === "dns_internal") note.push("Läuft der DNS-Filter netzweit, blockt er die Seite auch in deinem Browser.");
+    body.push(h("div", { class: "unsub-link" },
+      h("div", { class: "lbl" }, r.status === "manual" ? "Abmelde-Link" : "Selbst abmelden über den Link"),
+      h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, url),
+      note.length ? h("div", { class: "muted small" }, note.join(" ")) : null));
+  }
   if (details.length) body.push(h("details", {}, h("summary", { class: "muted" }, "DKIM-Prüfung"), h("ul", {}, ...details.map(d => h("li", { class: "mono" }, d)))));
 
   const n = row.cnt || 0;
+  if (n) body.push(h("p", { class: "muted" }, `Und die ${nf.format(n)} vorhandenen Mails? Eine Regel fängt auch Nachzügler ab, die noch kommen.`));
+
   const buttons = [["Schließen", "", "ghost"]];
-  if (r.status === "manual") buttons.push(["Als abgemeldet markieren", "mark", "ghost"]);
-  if (r.status === "ok" || r.status === "manual") {
-    body.push(h("p", { class: "muted" }, `Und die ${nf.format(n)} vorhandenen Mails? Eine Regel fängt auch Nachzügler ab, die noch kommen.`));
-    buttons.push(["Archivieren + Regel", "archive", ""], ["Löschen + Regel", "trash", "danger"]);
-  }
-  const v = await dialog("Abmelden: " + addr, body, buttons);
-  if (v === "mark") {
-    await api("/api/unsubscribe/mark", { method: "POST", body: { addr, done: true } });
-    loadSenders(true, true);
-  } else if (v === "archive" || v === "trash") {
-    try {
-      const rr = await createRule("addr", addr, v);
-      toast(`Regel angelegt, ${nf.format(rr.moved)} Mails verschoben`);
-    } catch (e) { toast(e.message, true); }
-    loadSenders(true, true); loadStatus();
-  } else loadSenders(true, true);
+  if (failed && alt.fallback_dns) buttons.push([`Erneut über DNS ${alt.fallback_dns}`, "fallback", ""]);
+  if (failed && alt.mailto && r.via !== "mailto") buttons.push(["Per Mail abmelden", "mailto", ""]);
+  if (r.status !== "ok") buttons.push(["Als abgemeldet markieren", "mark", "ghost"]);
+  buttons.push(["Archivieren + Regel", "archive", failed ? "ghost" : ""], ["Löschen + Regel", "trash", "danger"]);
+  return dialog("Abmelden: " + addr, body, buttons);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +566,7 @@ function renderSettings(r) {
         h("input", { type: "checkbox", name: x.key, value: n, checked: x.value.includes(n) }),
         ((r.folders || []).find(f => f.name === n) || {}).display || n)));
     } else {
-      input = h("input", { type: "text", name: x.key, value: Array.isArray(x.value) ? x.value.join(", ") : x.value, placeholder: x.type === "str" ? "automatisch" : "" });
+      input = h("input", { type: "text", name: x.key, value: Array.isArray(x.value) ? x.value.join(", ") : x.value, placeholder: x.placeholder ?? (x.type === "str" ? "automatisch" : "") });
     }
     const envVal = Array.isArray(x.env_value) ? x.env_value.join(", ") : (x.env_value === "" ? "leer" : String(x.env_value));
     return h("div", { class: "setrow" },
