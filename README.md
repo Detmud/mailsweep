@@ -17,7 +17,42 @@ Netzwerkverkehr nach außen: IMAP/SMTP zu Apple, DNS-Abfragen für DKIM-Schlüss
 
 account.apple.com → Anmelden und Sicherheit → App-spezifische Passwörter → „mailsweep“. Das Passwort lässt sich dort jederzeit widerrufen und gibt keinen Zugriff auf deinen Apple Account.
 
-### 2. Dateien auf die Komodo-VM kopieren
+### 2. Forgejo-Zugang für Komodo
+
+Komodo klont das Repo selbst. Dafür braucht es einen Forgejo-User mit Lesezugriff:
+
+- Forgejo: User `Komodo` anlegen (aktiv), im Repo `home.arpa/mailsweep` unter Einstellungen → Mitarbeiter mit Recht **Lesen** hinzufügen.
+- Als dieser User ein Token mit Scope `read:repository` erzeugen.
+- Komodo → Settings → Git Accounts: Domain `192.168.10.15:3300`, **HTTPS aus**, User `Komodo`, Token aus dem Schritt davor. Komodo klont direkt von Forgejo auf demselben Host, an Caddy und dessen interner CA vorbei.
+
+### 3. Stack in Komodo anlegen
+
+- Stacks → New Stack → Name `mailsweep`, Server `komodo-local`
+- Source **Git Repo**: Git Account aus Schritt 2, Repo `home.arpa/mailsweep`, Branch `main`, Compose File `compose.yaml`
+- **Environment**: Inhalt von `mailsweep.env.example` eintragen und anpassen. Passwörter nicht im Klartext, sondern als Secret-Variablen (Komodo → Settings → Variables, Haken *Secret*) und im Feld als `[[MAILSWEEP_IMAP_PASSWORD]]` bzw. `[[MAILSWEEP_UI_PASSWORD]]` referenzieren. Komodo schreibt das Feld beim Deploy nach `.env`, `compose.yaml` liest genau diese Datei.
+- **Poll for Updates / Auto Update aus**: Das Image wird lokal gebaut, es gibt keine Registry. Neue Versionen kommen über den Webhook (Schritt 4).
+- Deploy. Komodo baut das Image beim ersten Deploy (ca. 1 Minute).
+
+`IMAP_USER` ist deine iCloud-Mail-Hauptadresse (bei alten MobileMe-Accounts ggf. `…@me.com`). Schlägt der Login fehl, den Teil vor dem `@` probieren.
+
+Tipp für den ersten Lauf: `DRY_RUN=true` oder den Testmodus in der App einschalten. Dann siehst du alles, aber nichts wird verschoben oder abgemeldet.
+
+### 4. Automatisch deployen per Webhook
+
+Ziel: Ein Merge nach `main` landet ohne Handarbeit auf dem Host.
+
+1. **Forgejo darf ins LAN senden:** Im Forgejo-Stack `FORGEJO__webhook__ALLOWED_HOST_LIST=private` setzen und Forgejo neu deployen. Der Standard `external` blockt Ziele wie 192.168.x.x.
+2. **Webhook im Repo:** Einstellungen → Webhooks → Forgejo. Ziel-URL steht in Komodo im Stack unter *Webhooks* (Form `http://192.168.10.15:9120/listener/github/stack/<Stack-ID>/deploy`). Inhaltstyp `application/json`, Secret = `KOMODO_WEBHOOK_SECRET` aus der Komodo-Core-Konfiguration, nur Push-Events, Branch-Filter `main`.
+3. **Komodo:** Im Stack unter *Webhooks* „Webhook Enabled“ und **„Webhook Force Deploy“** einschalten. Ohne Force Deploy führt Komodo nur „Deploy if changed“ aus und vergleicht dabei die Compose-Datei. Bei mailsweep ändert sich meist nur Code, die Compose-Datei bleibt gleich, und der Webhook bewirkt dann nichts.
+4. **Test:** Einen PR mergen. In Komodo erscheint unter Updates ein `DeployStack`, danach steht oben in der App die neue Version.
+
+Wichtig: Ab jetzt heißt jeder Push nach `main` „live“. Deshalb `main` schützen: Repo-Einstellungen → Branches → Schutzregel für `main`: Pushen nur per Pull Request, Merge nur nach Freigabe. Neue Funktionen kommen über eigene Branches und PRs.
+
+Ohne Komodo geht es auch direkt: `git clone`, `cp mailsweep.env.example .env`, `.env` anpassen, `sudo docker compose up -d --build`.
+
+### Notfallweg: Dateien von Hand kopieren
+
+Falls Forgejo oder der Webhook nicht verfügbar sind. Stack in Komodo dann auf Source **Files on Server** mit Run Directory `/etc/komodo/stacks/mailsweep` umstellen.
 
 Vom Mac aus, als User `detmud`:
 
@@ -33,33 +68,12 @@ sudo tar xzf ~/mailsweep.tar.gz -C /etc/komodo/stacks/
 rm ~/mailsweep.tar.gz
 # gleiche Besitzrechte wie die anderen Stacks übernehmen
 sudo chown -R --reference=/etc/komodo/stacks/glance /etc/komodo/stacks/mailsweep
-```
-
-(Alternativ per Upload in code-server nach `/etc/komodo/stacks/` und dort im Terminal entpacken.)
-
-### 3. Zugangsdaten eintragen
-
-```bash
 cd /etc/komodo/stacks/mailsweep
-sudo cp -p mailsweep.env.example .env
-sudo chmod 600 .env
+sudo cp -p mailsweep.env.example .env && sudo chmod 600 .env
 sudo nano .env              # IMAP_USER, IMAP_PASSWORD, UI_PASSWORD setzen
 ```
 
-`IMAP_USER` ist deine iCloud-Mail-Hauptadresse (bei alten MobileMe-Accounts ggf. `…@me.com`). Schlägt der Login fehl, den Teil vor dem `@` probieren.
-
-Tipp für den ersten Lauf: `DRY_RUN=true`. Dann siehst du alles, aber nichts wird verschoben oder abgemeldet. Wenn die Liste plausibel aussieht, auf `false` stellen und neu deployen.
-
-### 4. Stack in Komodo anlegen
-
-- Stacks → New Stack → Name `mailsweep`, Server `komodo-local`
-- Modus **Files on Server**, Run Directory `/etc/komodo/stacks/mailsweep`
-- **Auto Update / Poll for Updates aus**: Das Image wird lokal gebaut, es gibt keine Registry.
-- Deploy. Komodo baut das Image beim ersten Deploy (ca. 1 Minute).
-
-Ohne Komodo geht es auch direkt: `sudo docker compose up -d --build` im Ordner.
-
-Updates des Codes: Dateien ersetzen, in Komodo „Redeploy“. `pull_policy: build` sorgt dafür, dass neu gebaut wird.
+Danach in Komodo „Redeploy“. `pull_policy: build` sorgt dafür, dass neu gebaut wird.
 
 ### 5. Caddy
 
@@ -123,6 +137,7 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 - **„IMAP-Login fehlgeschlagen“**: App-spezifisches Passwort prüfen, Benutzername mit/ohne Domain probieren.
 - **„Server kann weder MOVE noch UID EXPUNGE“**: Der Server unterstützt kein sicheres Verschieben. mailsweep bricht dann ab, statt fremde gelöschte Mails mit zu entfernen.
 - **Container startet nicht, Permission denied**: `apparmor:unconfined` ist im Compose bereits gesetzt; sonst Logs in Komodo ansehen.
+- **Merge nach `main`, aber keine neue Version**: In Forgejo unter Webhooks → letzte Zustellungen prüfen. Antwort 200, aber in Komodo kein `DeployStack` unter Updates: „Webhook Force Deploy“ fehlt (siehe Installation, Schritt 4). Fehler „Not allowed“ in Forgejo: `ALLOWED_HOST_LIST` fehlt. Antwort 401/403: Secret passt nicht.
 - Logs: Komodo → Stack `mailsweep` → Log, oder `docker logs mailsweep`.
 
 ## Tests
