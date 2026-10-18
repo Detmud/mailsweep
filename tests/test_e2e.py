@@ -143,6 +143,38 @@ with TestClient(main.app) as c:
     ok(any(l["action"] == "rule" and "1 Mails" in l["detail"] for l in lg), "Protokoll enthält Regel-Treffer")
     ok(c.get("/").status_code == 200 and "mailsweep" in c.get("/").text, "UI ausgeliefert")
     ok("frame-ancestors 'none'" in c.get("/").headers["content-security-policy"], "CSP gesetzt")
+    # Ordner hinzufügen und wieder entfernen: Daten verschwinden aus Liste und Zählern (#7)
+    def wait_sync(after):
+        for _ in range(150):
+            time.sleep(0.2)
+            s_ = c.get("/api/status").json()
+            if not s_["sync"]["running"] and (s_["sync"]["finished"] or 0) >= after:
+                return s_
+        return s_
+    base_folders = c.get("/api/settings").json()
+    base_folders = next(x for x in base_folders["settings"] if x["key"] == "folders")["value"]
+    before = c.get("/api/status").json()["messages"]
+    t0 = int(time.time())
+    r = c.post("/api/settings", headers=H, json={"values": {"folders": base_folders + ["Archive"]}})
+    ok(r.status_code == 200 and "folders" in r.json()["changed"], "Archive zu den Ordnern hinzugefügt")
+    st = wait_sync(t0)
+    ok(st["messages"] == before + 38 and any(f["name"] == "Archive" for f in st["folders"]),
+       f"Archive eingelesen ({before} -> {st['messages']})")
+    ok(any(x["key"] == "newsletter@shop-a.example" for x in c.get("/api/senders").json()["rows"]), "Archiv-Absender sichtbar")
+    r = c.post("/api/settings", headers=H, json={"values": {"folders": base_folders}})
+    st = c.get("/api/status").json()
+    ok(st["messages"] == before and not any(f["name"] == "Archive" for f in st["folders"]),
+       f"Archive entfernt: Zähler sofort zurück ({st['messages']}), Ordner weg")
+    ok(all(x["key"] != "newsletter@shop-a.example" for x in c.get("/api/senders").json()["rows"]), "Archiv-Absender nicht mehr in der Liste")
+    ok(c.get("/api/done").json()["totals"]["archive"] == 38, "Verlauf im Tab Erledigt bleibt erhalten")
+    st = wait_sync(int(time.time()))
+    ok(st["messages"] == before and not st["sync"]["error"], "Folgender Sync liest Archive nicht wieder ein")
+    # Zurücksetzen auf den Env-Wert räumt ebenfalls auf
+    c.post("/api/settings", headers=H, json={"values": {"folders": base_folders + ["Archive"]}})
+    wait_sync(int(time.time()))
+    c.delete("/api/settings/folders", headers=H)
+    ok(c.get("/api/status").json()["messages"] == before, "Zurücksetzen auf Env-Ordner entfernt Archive-Daten")
+    wait_sync(int(time.time()))
 # Testmodus: Spuren werden markiert und nach dem Umschalten entfernt
 from app import db as _db
 from app.config import settings as _st

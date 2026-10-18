@@ -167,6 +167,7 @@ async function loadFolders() {
     const sel = $("#folder");
     sel.replaceChildren(h("option", { value: "" }, "Alle Ordner"),
       ...scan.map(f => h("option", { value: f }, (r.folders.find(x => x.name === f) || {}).display || f)));
+    if (S.folder && !scan.includes(S.folder)) S.folder = "";
     sel.value = S.folder;
     $("#ruleTarget").replaceChildren(...r.folders.map(f => h("option", { value: f.name }, f.display)));
   } catch (e) { /* Ordner kommen nach dem ersten Sync */ }
@@ -545,7 +546,9 @@ async function saveSettings(values, msg) {
   try {
     const r = await api("/api/settings", { method: "POST", body: { values } });
     toast(r.changed.length ? (msg || "Gespeichert") : "Keine Änderung");
-    renderSettings(r); loadStatus();
+    renderSettings(r);
+    await loadStatus();
+    if (r.changed.includes("folders")) { loadFolders(); loadSenders(true, true); }
     return true;
   } catch (e) { toast(e.message, true); return false; }
 }
@@ -573,9 +576,13 @@ function renderSettings(r) {
       h("div", {}, h("div", { class: "lbl" }, x.label), h("div", { class: "help" }, x.help)),
       h("div", {}, input),
       h("div", { class: "src" },
-        h("span", { class: "badge " + (x.source === "app" ? "acc" : ""), title: `Wert aus mailsweep.env: ${envVal}` }, x.source === "app" ? "in App gesetzt" : "aus Env"),
+        h("span", { class: "badge " + (x.source === "app" ? "acc" : ""), title: `Wert aus der Env-Datei: ${envVal}` }, x.source === "app" ? "in App gesetzt" : "aus Env"),
         x.source === "app" ? h("button", { type: "button", class: "linkbtn", onclick: async () => {
-          try { renderSettings(await api(`/api/settings/${x.key}`, { method: "DELETE" })); toast("Auf Env-Wert zurückgesetzt"); loadStatus(); }
+          try {
+            renderSettings(await api(`/api/settings/${x.key}`, { method: "DELETE" })); toast("Auf Env-Wert zurückgesetzt");
+            await loadStatus();
+            if (x.key === "folders") { loadFolders(); loadSenders(true, true); }
+          }
           catch (e) { toast(e.message, true); }
         } }, "Zurücksetzen") : null),
     );

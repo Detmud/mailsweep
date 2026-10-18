@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import secrets
+import threading
 import time
 from contextlib import asynccontextmanager
 from typing import Literal
@@ -518,8 +519,13 @@ async def api_settings_save(req: SettingsReq):
         log.warning("DRY_RUN ausgeschaltet: Aktionen werden ab jetzt wirklich ausgeführt.")
     if {"archive_folder", "trash_folder"} & changed.keys():
         jobs.status.special = {}
-    if "folders" in changed and not jobs.status.running:
-        asyncio.get_running_loop().run_in_executor(None, jobs.run_sync)
+    if "folders" in changed:
+        # Entfernte Ordner sofort aus Liste und Zählern nehmen, nicht erst nach dem nächsten Sync
+        removed = db.prune_folders(settings.folders)
+        if removed:
+            db.add_log("settings", "folders", f"{removed} Einträge aus entfernten Ordnern verworfen")
+        if not jobs.status.running:
+            asyncio.get_running_loop().run_in_executor(None, jobs.run_sync)
     return {"changed": list(changed), **_settings_payload()}
 
 
@@ -533,4 +539,8 @@ def api_settings_reset(key: str):
     db.add_log("settings", key, f"auf Env-Wert zurückgesetzt: {old} → {ENV_DEFAULTS[key]}")
     if key == "dry_run" and not settings.dry_run:
         db.clear_dry_traces()
+    if key == "folders" and old != settings.folders:
+        db.prune_folders(settings.folders)
+        if not jobs.status.running:
+            threading.Thread(target=jobs.run_sync, daemon=True).start()
     return _settings_payload()
