@@ -57,6 +57,15 @@ class Settings:
     # iCloud setzt mehrere Header, z. B. dkim-verifier.icloud.com, dmarc.icloud.com, spf.icloud.com.
     trusted_authserv: list[str] = field(default_factory=lambda: [s.lower() for s in _list("TRUSTED_AUTHSERV_IDS", "icloud.com")])
 
+    # Spamfilter (#3): lokaler Rspamd, standardmäßig aus. Bewertet nur Mails der letzten N Tage,
+    # pro Sync höchstens spam_per_sync Stück, und holt pro Mail höchstens spam_max_kb KB.
+    spam_filter: bool = field(default_factory=lambda: _bool("SPAM_FILTER", False))
+    rspamd_url: str = field(default_factory=lambda: _env("RSPAMD_URL", "http://rspamd:11333") or "")
+    spam_threshold: int = field(default_factory=lambda: int(_env("SPAM_THRESHOLD", "6")))
+    spam_max_age_days: int = field(default_factory=lambda: int(_env("SPAM_MAX_AGE_DAYS", "30")))
+    spam_per_sync: int = field(default_factory=lambda: int(_env("SPAM_PER_SYNC", "300")))
+    spam_max_kb: int = field(default_factory=lambda: int(_env("SPAM_MAX_KB", "512")))
+
     data_dir: str = field(default_factory=lambda: _env("DATA_DIR", "/data") or "/data")
     ui_user: str = field(default_factory=lambda: _env("UI_USER", "admin") or "admin")
     ui_password: str = field(default_factory=lambda: _env("UI_PASSWORD", "") or "")
@@ -94,6 +103,15 @@ EDITABLE: dict[str, dict] = {
                        "help": "Leer = automatisch erkennen (iCloud: Archive)."},
     "trash_folder": {"type": "str", "label": "Papierkorb-Ordner",
                      "help": "Leer = automatisch erkennen (iCloud: Deleted Messages)."},
+    "spam_filter": {"type": "bool", "label": "Spamfilter (Rspamd)",
+                    "help": "Bewertet neue Mails mit dem lokalen Rspamd. Braucht den Rspamd-Container "
+                            "(COMPOSE_PROFILES=spam). Inhalte verlassen das Homelab nicht und werden nicht gespeichert."},
+    "spam_threshold": {"type": "int", "min": 1, "max": 50, "label": "Spam-Schwelle (Score)",
+                       "help": "Ab diesem Rspamd-Score gilt eine Mail als Spam-Verdacht."},
+    "spam_max_age_days": {"type": "int", "min": 1, "max": 3650, "label": "Spam: Mails der letzten Tage",
+                          "help": "Nur jüngere Mails werden bewertet. Jede Bewertung lädt die Mail vom Server."},
+    "spam_per_sync": {"type": "int", "min": 10, "max": 5000, "label": "Spam: Bewertungen pro Sync",
+                      "help": "Begrenzt den IMAP-Verkehr. Der Rest folgt beim nächsten Sync."},
     "fetch_batch": {"type": "int", "min": 10, "max": 1000, "label": "Header pro Abruf",
                     "help": "Bei Timeouts verkleinern."},
 }

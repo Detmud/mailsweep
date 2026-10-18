@@ -415,6 +415,21 @@ class Imap:
                     return literal
         raise ImapError(f"Mail UID {uid} in {folder!r} nicht abrufbar")
 
+    def fetch_partial(self, folder: str, uids: list[int], max_bytes: int) -> dict[int, bytes]:
+        """Holt die ersten max_bytes jeder Mail (Header und Anfang des Inhalts), ohne \\Seen zu setzen."""
+        if not uids:
+            return {}
+        self.select(folder, readonly=True)
+        typ, data = self.c.uid("FETCH", uid_set(uids), f"(UID BODY.PEEK[]<0.{int(max_bytes)}>)")
+        if typ != "OK":
+            raise ImapError(f"UID FETCH fehlgeschlagen: {data}")
+        out: dict[int, bytes] = {}
+        for meta, literal in split_fetch_response(data):
+            m = _UID_RE.search(meta)
+            if m and literal:
+                out[int(m.group(1))] = literal
+        return out
+
     def fetch_header_fields(self, folder: str, uid: int, fields: str) -> bytes:
         """Holt ausgewählte Header einer Mail (ohne Inhalt, ohne \\Seen zu setzen)."""
         self.select(folder, readonly=True)
