@@ -51,6 +51,11 @@ with TestClient(main.app) as c:
     det = c.get("/api/sender", params={"key": "news@mail.verein.example"}).json()
     ok(det["messages"][0]["subject"].startswith("Vereinsbrief N°0 – Grüße"), f"Betreff dekodiert: {det['messages'][0]['subject']}")
     ok(det["parsed"]["mailto"] == ["mailto:abmelden@verein.example?subject=Abmelden"], "List-Unsubscribe geparst")
+    au = c.get("/api/sender/auth", params={"key": "newsletter@shop-a.example"}).json()
+    hd = au["headers"][0] if au.get("headers") else {}
+    ok(hd.get("authserv_id") == "mx.test" and hd.get("used") and not hd.get("trusted") and au["dkim_signatures"] == ["shop-a.example"]
+       and au["auth_dkim"] == "pass", f"Live-Header der neuesten Mail ({au})")
+    ok(c.get("/api/sender/auth", params={"key": "gibtsnicht@example"}).status_code == 404, "Live-Header: unbekannter Absender -> 404")
 
     # Abmelden
     u = c.post("/api/unsubscribe", headers=H, json={"addr": "newsletter@shop-a.example"}).json()

@@ -225,6 +225,11 @@ button.badge { border: 0; cursor: pointer; font: inherit; font-size: 11px; font-
 .mlist .f { grid-column: 1 / -1; color: var(--ink-3); font-size: 12px; }
 .raw { font-family: var(--mono); font-size: 12px; background: var(--surface-2); padding: 10px; border-radius: 6px; word-break: break-all; white-space: pre-wrap; }
 
+.authlist { list-style: none; padding: 0; margin: 8px 0; }
+.authlist li { padding: 6px 0; border-bottom: 1px solid var(--line); word-break: break-all; }
+.authlist .badge { margin-right: 8px; }
+.authbox .small { margin: 0 0 8px; }
+
 /* Dialog */
 dialog {
   border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--surface); color: var(--ink);

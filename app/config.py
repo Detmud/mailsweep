@@ -53,6 +53,10 @@ class Settings:
     fetch_batch: int = field(default_factory=lambda: int(_env("FETCH_BATCH", "250")))
     dry_run: bool = field(default_factory=lambda: _bool("DRY_RUN", False))
 
+    # authserv-ids, deren Authentication-Results mailsweep vertraut (Suffix-Vergleich, kommagetrennt).
+    # iCloud setzt mehrere Header, z. B. dkim-verifier.icloud.com, dmarc.icloud.com, spf.icloud.com.
+    trusted_authserv: list[str] = field(default_factory=lambda: [s.lower() for s in _list("TRUSTED_AUTHSERV_IDS", "icloud.com")])
+
     data_dir: str = field(default_factory=lambda: _env("DATA_DIR", "/data") or "/data")
     ui_user: str = field(default_factory=lambda: _env("UI_USER", "admin") or "admin")
     ui_password: str = field(default_factory=lambda: _env("UI_PASSWORD", "") or "")

@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS log (
 """
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def init_db() -> None:
@@ -102,8 +102,9 @@ def init_db() -> None:
         con.executescript(SCHEMA)
         row = con.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
         current = int(row[0]) if row else 1
-        if current < 2:
-            # v2 liest zusätzlich ARC-Authentication-Results: Header-Cache einmal neu aufbauen
+        if current < SCHEMA_VERSION:
+            # v2: ARC-Authentication-Results, v3: alle vertrauenswürdigen Authentication-Results (#1).
+            # Der Header-Cache wird einmal verworfen und beim nächsten Sync neu aufgebaut.
             con.execute("DELETE FROM messages")
             con.execute("DELETE FROM folders")
         con.execute(
