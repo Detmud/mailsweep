@@ -9,6 +9,9 @@ services:
     env_file: .env              # schreibt Komodo aus dem Stack-Feld "Environment"; ohne Komodo: cp mailsweep.env.example .env
     ports:
       - "8743:8080"
+    networks:
+      - default
+      - spam                    # nur für den optionalen Rspamd
     volumes:
       - mailsweep-data:/data    # benanntes Volume: gehört automatisch dem Container-User
     read_only: true
@@ -26,5 +29,38 @@ services:
         max-size: "5m"
         max-file: "3"
 
+  # Optionaler Spamfilter (#3). Startet nur mit COMPOSE_PROFILES=spam in der Env-Datei.
+  rspamd:
+    profiles: ["spam"]
+    build: ./rspamd
+    image: mailsweep-rspamd:local
+    pull_policy: build
+    container_name: mailsweep-rspamd
+    restart: unless-stopped
+    networks:
+      - spam                    # kein Internet, kein Port nach außen
+    volumes:
+      - rspamd-data:/var/lib/rspamd
+    read_only: true
+    tmpfs:
+      - /run/rspamd:mode=1777
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:unconfined
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+networks:
+  spam:
+    internal: true              # Docker-Netz ohne Weg ins Internet
+
 volumes:
   mailsweep-data:
+  rspamd-data:
