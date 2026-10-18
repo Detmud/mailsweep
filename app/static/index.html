@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mailsweep</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <svg viewBox="0 0 24 24" class="logo" aria-hidden="true"><path d="M3 6h18v12H3z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3 7l9 6 9-6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15 20l6-6" stroke="currentColor" stroke-width="1.6"/></svg>
+    <span class="wordmark">mailsweep</span>
+    <span id="account" class="muted"></span>
+    <span id="version" class="muted ver"></span>
+    <button id="dryrun" class="badge warn hidden" title="Testmodus aktiv, zu den Einstellungen">DRY-RUN</button>
+  </div>
+  <div class="syncbox">
+    <div class="syncinfo">
+      <span id="syncText" class="muted">…</span>
+      <div class="progress hidden" id="progress"><div id="progressBar"></div></div>
+    </div>
+    <button id="syncBtn" class="btn">Jetzt synchronisieren</button>
+  </div>
+</header>
+
+<section class="stats" id="stats">
+  <div><span class="num" id="stMessages">–</span><span class="lbl">Mails analysiert</span></div>
+  <div><span class="num" id="stBytes">–</span><span class="lbl">Speicher</span></div>
+  <div><span class="num" id="stSenders">–</span><span class="lbl">Absender</span></div>
+  <div><span class="num" id="stUnsub">–</span><span class="lbl">mit Abmeldelink</span></div>
+</section>
+
+<nav class="tabs" role="tablist">
+  <button role="tab" class="tab active" data-tab="senders">Absender</button>
+  <button role="tab" class="tab" data-tab="done">Erledigt</button>
+  <button role="tab" class="tab" data-tab="rules">Regeln</button>
+  <button role="tab" class="tab" data-tab="log">Protokoll</button>
+  <button role="tab" class="tab" data-tab="settings">Einstellungen</button>
+</nav>
+
+<main>
+  <!-- Absender -->
+  <section id="tab-senders" class="panel">
+    <div class="toolbar">
+      <input id="q" type="search" placeholder="Absender, Name oder Domain suchen" autocomplete="off">
+      <div class="seg" id="groupSeg">
+        <button data-group="addr" class="on">Absender</button>
+        <button data-group="domain">Domain</button>
+      </div>
+      <select id="sort" aria-label="Sortierung">
+        <option value="count">Meiste Mails</option>
+        <option value="size">Größter Speicher</option>
+        <option value="recent">Zuletzt aktiv</option>
+        <option value="name">Alphabetisch</option>
+      </select>
+      <select id="folder" aria-label="Ordner"><option value="">Alle Ordner</option></select>
+      <label class="chk"><input type="checkbox" id="onlyUnsub"> nur mit Abmeldelink</label>
+      <label class="chk"><input type="checkbox" id="hideUnsubscribed"> abgemeldete ausblenden</label>
+      <label class="chk"><input type="checkbox" id="showKept"> ausgeblendete zeigen</label>
+    </div>
+
+    <div class="bulk hidden" id="bulk">
+      <span id="bulkCount"></span>
+      <button class="btn sm" data-bulk="archive">Archivieren</button>
+      <button class="btn sm danger" data-bulk="trash">In Papierkorb</button>
+      <button class="btn sm ghost" data-bulk="keep">Ausblenden</button>
+      <button class="btn sm ghost" data-bulk="rule-archive">Regel: künftig archivieren</button>
+      <button class="btn sm ghost" data-bulk="rule-trash">Regel: künftig löschen</button>
+      <button class="btn sm ghost" id="bulkClear">Auswahl aufheben</button>
+    </div>
+
+    <div class="tablewrap">
+      <table class="grid" id="senderTable">
+        <thead>
+          <tr>
+            <th class="c-sel"><input type="checkbox" id="selAll" aria-label="Alle auswählen"></th>
+            <th>Absender</th>
+            <th class="num">Mails</th>
+            <th class="num hide-s">Größe</th>
+            <th class="hide-s">Zuletzt</th>
+            <th class="hide-m">Abmelden per</th>
+            <th class="hide-s">Status</th>
+            <th class="hide-m">DKIM</th>
+            <th class="c-act">Aktionen</th>
+          </tr>
+        </thead>
+        <tbody id="senderRows"></tbody>
+      </table>
+      <div class="empty hidden" id="emptyState"></div>
+    </div>
+    <div class="pager">
+      <span id="pagerInfo" class="muted"></span>
+      <button class="btn ghost" id="moreBtn">Mehr laden</button>
+    </div>
+  </section>
+
+  <!-- Erledigt -->
+  <section id="tab-done" class="panel hidden">
+    <div class="stats boxed" id="doneSummary"></div>
+    <p class="hint warn hidden" id="doneHint">DRY_RUN ist aktiv: Einträge mit „Test“ sind nur simuliert, im Postfach ist nichts passiert. Nach dem Umschalten auf DRY_RUN=false verschwinden sie.</p>
+    <div class="toolbar">
+      <input id="doneQ" type="search" placeholder="Erledigte durchsuchen" autocomplete="off">
+    </div>
+    <div class="tablewrap">
+      <table class="grid">
+        <thead><tr>
+          <th id="doneGroupLabel">Absender</th><th>Abgemeldet</th><th class="num">Papierkorb</th><th class="num">Archiv</th>
+          <th class="hide-s">Regel</th><th class="num">Noch da</th><th class="hide-s">Zuletzt</th><th></th>
+        </tr></thead>
+        <tbody id="doneRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Regeln -->
+  <section id="tab-rules" class="panel hidden">
+    <p class="muted intro">Regeln laufen nach jedem Sync über die analysierten Ordner und verschieben passende Mails. Sie leben in mailsweep, nicht auf dem iCloud-Server: Läuft der Container nicht, greifen sie nicht.</p>
+    <form id="ruleForm" class="ruleform">
+      <select name="match_type"><option value="addr">Absender ist</option><option value="domain">Domain ist</option></select>
+      <input name="value" placeholder="newsletter@shop.de oder shop.de" required>
+      <select name="action" id="ruleAction"><option value="archive">archivieren</option><option value="trash">in Papierkorb</option><option value="move">verschieben nach …</option></select>
+      <select name="target_folder" id="ruleTarget" class="hidden"></select>
+      <label class="chk"><input type="checkbox" name="apply_now" checked> sofort auf vorhandene Mails anwenden</label>
+      <button class="btn">Regel anlegen</button>
+    </form>
+    <div class="tablewrap">
+      <table class="grid">
+        <thead><tr><th>Bedingung</th><th>Aktion</th><th class="num">Treffer</th><th class="hide-s">Angelegt</th><th></th></tr></thead>
+        <tbody id="ruleRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Einstellungen -->
+  <section id="tab-settings" class="panel hidden">
+    <div class="drycard" id="dryCard">
+      <div>
+        <div class="drytitle" id="dryTitle"></div>
+        <div class="muted" id="dryText"></div>
+      </div>
+      <button class="btn" id="dryToggle"></button>
+    </div>
+    <form id="settingsForm" class="settings"></form>
+    <p class="muted small">Gespeicherte Werte überschreiben die Env-Datei und bleiben nach Neustarts erhalten. „Zurücksetzen“ stellt den Wert aus <span class="mono">mailsweep.env</span> wieder her. Zugangsdaten und UI-Passwort stehen bewusst nur in der Env-Datei.</p>
+    <p class="muted small" id="aboutLine"></p>
+  </section>
+
+  <!-- Protokoll -->
+  <section id="tab-log" class="panel hidden">
+    <div class="tablewrap">
+      <table class="grid">
+        <thead><tr><th>Zeit</th><th>Aktion</th><th>Ziel</th><th>Ergebnis</th></tr></thead>
+        <tbody id="logRows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<!-- Detail-Ansicht -->
+<aside class="drawer hidden" id="drawer" aria-label="Absenderdetails">
+  <div class="drawer-head">
+    <div>
+      <div class="drawer-title" id="dTitle"></div>
+      <div class="muted" id="dSub"></div>
+    </div>
+    <button class="icon" id="dClose" aria-label="Schließen">✕</button>
+  </div>
+  <div class="drawer-actions" id="dActions"></div>
+  <div class="drawer-body" id="dBody"></div>
+</aside>
+<div class="scrim hidden" id="scrim"></div>
+
+<!-- Dialog -->
+<dialog id="dlg">
+  <form method="dialog">
+    <h3 id="dlgTitle"></h3>
+    <div id="dlgBody"></div>
+    <menu id="dlgMenu"></menu>
+  </form>
+</dialog>
+
+<div id="toasts" aria-live="polite"></div>
+</body>
+</html>
