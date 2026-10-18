@@ -2,6 +2,11 @@
 
 Versionsschema: MAJOR.MINOR.PATCH. Die laufende Version steht oben in der Weboberfläche und im Container-Log.
 
+## 1.3.1 (2026-10-18)
+- Fix (#7): Ordner, die aus „Analysierte Ordner“ entfernt werden oder auf dem Server verschwinden, verschwinden jetzt auch aus Absenderliste, Zählern und Ordnerfilter. Das passiert sofort beim Speichern, nicht erst beim nächsten Sync. Verlauf, Regeln und der Tab „Erledigt“ bleiben erhalten.
+- Ändert sich die Ordnerliste während eines laufenden Syncs, liest mailsweep neu hinzugekommene Ordner noch im selben Lauf ein.
+- Tooltip in den Einstellungen nennt die Env-Datei statt `mailsweep.env`.
+
 ## 1.3.0 (2026-10-18)
 - Abmelden endet nach einem Fehler nicht mehr in einer Sackgasse (#4). Der Dialog bietet je nach Lage: erneut über Ausweich-DNS, per Mail abmelden, Link selbst öffnen, als abgemeldet markieren, Archivieren + Regel, Löschen + Regel.
 - Blockt ein DNS-Filter (Pi-hole, AdGuard, NextDNS) die Abmelde-Domain (Antwort 0.0.0.0, ::, 127.x), sagt mailsweep das jetzt klar, statt „interne Adresse“ zu melden.

@@ -73,12 +73,23 @@ def run_sync() -> None:
             status.folders = conn.list_folders()
             status.special = conn.special_folders()
             existing = {f["name"] for f in status.folders}
-            for folder in settings.folders:
-                if folder not in existing:
-                    log.warning("Ordner %r existiert nicht, übersprungen", folder)
-                    db.add_log("sync", folder, "Ordner existiert nicht", ok=False)
-                    continue
-                _sync_folder(conn, folder)
+            # Die Ordnerliste kann sich während des Syncs in den Einstellungen ändern:
+            # neu hinzugekommene Ordner werden noch in diesem Lauf eingelesen,
+            # entfernte nicht mehr angefasst.
+            seen: set[str] = set()
+            while todo := [f for f in settings.folders if f not in seen]:
+                for folder in todo:
+                    seen.add(folder)
+                    if folder not in settings.folders:
+                        continue
+                    if folder not in existing:
+                        log.warning("Ordner %r existiert nicht, übersprungen", folder)
+                        db.add_log("sync", folder, "Ordner existiert nicht", ok=False)
+                        continue
+                    _sync_folder(conn, folder)
+            removed = db.prune_folders(set(settings.folders) & existing)
+            if removed:
+                log.info("%d Einträge aus nicht mehr analysierten Ordnern entfernt", removed)
             status.phase = "Regeln anwenden"
             _apply_rules(conn)
         status.phase = "fertig"

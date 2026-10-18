@@ -153,6 +153,18 @@ def delete_override(key: str) -> None:
         con.execute("DELETE FROM app_settings WHERE key=?", (key,))
 
 
+def prune_folders(keep) -> int:
+    """Entfernt Header-Daten aller Ordner, die nicht in keep stehen (nicht mehr analysiert oder
+    auf dem Server verschwunden). Verlauf (moves, log), Regeln und Absender-Status bleiben."""
+    keep = list(keep)
+    ph = ",".join("?" * len(keep))
+    cond = f"NOT IN ({ph})" if keep else "IS NOT NULL"
+    with connect() as con:
+        n = con.execute(f"DELETE FROM messages WHERE folder {cond}", keep).rowcount
+        con.execute(f"DELETE FROM folders WHERE name {cond}", keep)
+    return n
+
+
 @contextmanager
 def connect():
     con = sqlite3.connect(settings.db_path, timeout=30)
