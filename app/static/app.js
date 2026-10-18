@@ -455,12 +455,33 @@ async function openDrawer(row) {
       parts.push(h("h4", {}, "List-Unsubscribe (neueste Mail)"));
       parts.push(h("div", { class: "raw" }, d.list_unsubscribe.list_unsub + (d.list_unsubscribe.list_unsub_post ? "\nList-Unsubscribe-Post: " + d.list_unsubscribe.list_unsub_post : "")));
     }
+    parts.push(h("h4", {}, "Authentifizierung (neueste Mail)"));
+    const authBox = h("div", { class: "authbox" },
+      h("p", { class: "muted small" }, "Zeigt live vom Mailserver, welche Authentication-Results-Header die neueste Mail trägt und welche mailsweep für die DKIM-Spalte wertet."),
+      h("button", { class: "btn sm ghost", onclick: () => loadAuth(key, authBox) }, "Header laden"));
+    parts.push(authBox);
     if (d.state && d.state.unsub_result) {
       parts.push(h("h4", {}, "Abmeldung"));
       parts.push(h("p", {}, `${dtfl.format(new Date(d.state.unsubscribed_at * 1000))}: ${d.state.unsub_result}`));
     }
     $("#dBody").replaceChildren(...parts);
   } catch (e) { $("#dBody").replaceChildren(h("p", { class: "log-err" }, e.message)); }
+}
+async function loadAuth(key, box) {
+  box.replaceChildren(h("p", { class: "muted" }, "Lade …"));
+  try {
+    const a = await api(`/api/sender/auth?${new URLSearchParams({ key, group: S.group })}`);
+    const res = a.auth_dkim ? `${a.auth_dkim}${a.auth_dkim_domain ? " (" + a.auth_dkim_domain + ")" : ""}` : "kein Ergebnis";
+    const items = a.headers.map(x => h("li", {},
+      h("span", { class: "badge " + (x.used ? "ok" : x.trusted ? "acc" : ""), title: x.used ? "Wird für die DKIM-Spalte gewertet" : x.trusted ? "Vertrauenswürdiger Absender des Headers" : "Fremde authserv-id, wird ignoriert" },
+        x.used ? "gewertet" : x.trusted ? "vertraut" : "ignoriert"),
+      h("span", { class: "mono" }, `${x.header}: ${x.value}`)));
+    box.replaceChildren(
+      h("p", {}, "Ergebnis in mailsweep: ", h("strong", {}, res)),
+      items.length ? h("ul", { class: "authlist" }, ...items) : h("p", { class: "muted" }, "Die Mail trägt keinen Authentication-Results-Header."),
+      h("p", { class: "muted small" }, `DKIM-Signaturen: ${a.dkim_signatures.length ? a.dkim_signatures.join(", ") : "keine"} · Vertraute authserv-ids: ${a.trusted_authserv.join(", ") || "keine"} (Env TRUSTED_AUTHSERV_IDS)`),
+    );
+  } catch (e) { box.replaceChildren(h("p", { class: "log-err" }, e.message)); }
 }
 function closeDrawer() { $("#drawer").classList.add("hidden"); $("#scrim").classList.add("hidden"); }
 async function ruleFromDrawer(key, action) {
