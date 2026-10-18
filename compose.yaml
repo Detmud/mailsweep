@@ -1,0 +1,30 @@
+# Komodo-Stack: /etc/komodo/stacks/mailsweep/compose.yaml
+services:
+  mailsweep:
+    build: .
+    image: mailsweep:local
+    pull_policy: build          # lokales Image, nie aus einer Registry ziehen
+    container_name: mailsweep
+    restart: unless-stopped
+    env_file: mailsweep.env     # bewusst nicht .env, die schreibt Komodo selbst
+    ports:
+      - "8743:8080"
+    volumes:
+      - mailsweep-data:/data    # benanntes Volume: gehört automatisch dem Container-User
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:unconfined     # wie bei den anderen Stacks (PVE-Kernel + docker-default)
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  mailsweep-data:
