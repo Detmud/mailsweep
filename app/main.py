@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -17,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import db, jobs, unsubscribe
+from . import imap as imap_mod
 from .config import EDITABLE, ENV_DEFAULTS, coerce, settings
 from .imap import ImapError
 from .version import __version__
@@ -363,6 +365,45 @@ def api_sender(key: str, group: Literal["addr", "domain"] = "addr"):
         "parsed": unsubscribe.parse_list_unsubscribe(unsub["list_unsub"]) if unsub else None,
         "state": dict(state) if state else None,
     }
+
+
+AUTH_FIELDS = "AUTHENTICATION-RESULTS ARC-AUTHENTICATION-RESULTS DKIM-SIGNATURE"
+
+
+@app.get("/api/sender/auth", dependencies=[Depends(auth)])
+async def api_sender_auth(key: str, group: Literal["addr", "domain"] = "addr"):
+    """Zeigt live vom Server, welche Authentifizierungs-Header die neueste Mail trägt und welche gewertet werden."""
+    col = "org_domain" if group == "domain" else "from_addr"
+    with db.connect() as con:
+        row = con.execute(
+            f"SELECT folder, uid, org_domain, auth_dkim, auth_dkim_domain FROM messages WHERE {col}=? "
+            f"ORDER BY date DESC LIMIT 1", (key,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Keine Mail dieses Absenders im Cache")
+
+    def load():
+        with jobs.imap_job() as conn:
+            return conn.fetch_header_fields(row["folder"], row["uid"], AUTH_FIELDS)
+    raw = await asyncio.to_thread(load)
+    msg = imap_mod.parse_header_block(raw)
+    used_name, used = imap_mod.auth_result_headers(msg)
+    used_set = set(used)
+    lines = []
+    for hname in ("Authentication-Results", "ARC-Authentication-Results"):
+        for v in msg.get_all(hname) or []:
+            v = " ".join(str(v).split())
+            aid = imap_mod.authserv_id(v)
+            lines.append({"header": hname, "value": v[:1000], "authserv_id": aid,
+                          "trusted": imap_mod.is_trusted_authserv(aid),
+                          "used": hname == used_name and v in {" ".join(u.split()) for u in used_set}})
+    sigs = []
+    for v in msg.get_all("DKIM-Signature") or []:
+        m = re.search(r"\bd=([^;\s]+)", str(v))
+        sigs.append(m.group(1).lower() if m else "?")
+    return {"folder": row["folder"], "uid": row["uid"], "auth_dkim": row["auth_dkim"],
+            "auth_dkim_domain": row["auth_dkim_domain"], "headers": lines, "dkim_signatures": sigs,
+            "trusted_authserv": settings.trusted_authserv}
 
 
 class ActionReq(BaseModel):

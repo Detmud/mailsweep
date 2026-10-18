@@ -2,6 +2,13 @@
 
 Versionsschema: MAJOR.MINOR.PATCH. Die laufende Version steht oben in der Weboberfläche und im Container-Log.
 
+## 1.4.0 (2026-10-18)
+- Fix (#1): Die DKIM-Spalte wertet jetzt alle `Authentication-Results`-Header des eigenen Mailservers aus, nicht nur den obersten. iCloud setzt pro Prüfung einen eigenen Header (bimi, dmarc, dkim-verifier, spf). Stand der DKIM-Header nicht oben, zeigte die Spalte „?“.
+- Vertrauen nach authserv-id: Gewertet werden nur Header, deren Absender in `TRUSTED_AUTHSERV_IDS` steht (Standard `icloud.com`, Suffix-Vergleich). Gefälschte Header mit fremder authserv-id zählen nicht. Ohne passenden Header gilt wie bisher der oberste.
+- Neu im Detailbereich eines Absenders: „Authentifizierung (neueste Mail)“ lädt die Authentifizierungs-Header live vom Server und zeigt, welche gewertet werden.
+- Der Header-Cache wird nach dem Update einmal neu aufgebaut (Schema 3). Der erste Sync dauert deshalb etwas länger. Regeln, Verlauf und Einstellungen bleiben erhalten.
+- Neue Parser-Tests (`tests/test_parse.py`).
+
 ## 1.3.1 (2026-10-18)
 - Fix (#7): Ordner, die aus „Analysierte Ordner“ entfernt werden oder auf dem Server verschwinden, verschwinden jetzt auch aus Absenderliste, Zählern und Ordnerfilter. Das passiert sofort beim Speichern, nicht erst beim nächsten Sync. Verlauf, Regeln und der Tab „Erledigt“ bleiben erhalten.
 - Ändert sich die Ordnerliste während eines laufenden Syncs, liest mailsweep neu hinzugekommene Ordner noch im selben Lauf ein.

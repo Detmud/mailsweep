@@ -90,7 +90,7 @@ Badges in der Liste:
 | One-Click | Abmeldung per HTTPS-POST nach RFC 8058, ohne Webseite |
 | Mail | Abmeldung per Mail an den Absender |
 | Link | nur Webseite, musst du selbst öffnen |
-| DKIM pass | laut Authentication-Results des iCloud-Servers gültig signiert |
+| DKIM pass | laut Authentication-Results des iCloud-Servers gültig signiert. Welche Header gewertet werden, zeigt der Detailbereich unter „Authentifizierung“ |
 | DKIM fremd | von einer fremden Domain signiert, typisch für Spoofing: nicht abmelden, löschen |
 
 Klappt das Abmelden nicht, zeigt der Dialog, was stattdessen geht: Link selbst öffnen, per Mail abmelden, als abgemeldet markieren oder direkt archivieren bzw. löschen mit Regel.
@@ -113,6 +113,7 @@ Alle Optionen stehen kommentiert in `mailsweep.env.example`. Die wichtigsten:
 | `DRY_RUN` | `false` | Nur protokollieren, nichts ausführen |
 | `ALLOW_MAILTO_UNSUBSCRIBE` | `true` | Abmelde-Mails über `smtp.mail.me.com` senden |
 | `UNSUB_FALLBACK_DNS` | `9.9.9.9` | Ausweich-DNS, falls dein DNS-Filter eine Abmelde-Domain blockt; nur auf Klick, leer = aus |
+| `TRUSTED_AUTHSERV_IDS` | `icloud.com` | Mailserver, deren `Authentication-Results` für die DKIM-Spalte zählen (Suffix-Vergleich) |
 | `FETCH_BATCH` | `250` | Header pro IMAP-Abruf; bei Timeouts verkleinern |
 | `UI_USER` / `UI_PASSWORD` | `admin` / leer | Basic-Auth der Weboberfläche |
 
@@ -131,6 +132,7 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 
 ```bash
 python tests/test_net.py   # ohne Mailserver: DNS-Sperren, Ausweich-DNS, IP-Pinning mit TLS
+python tests/test_parse.py # ohne Mailserver: DKIM-Ergebnis aus Authentication-Results
 python tests/seed.py 127.0.0.1 10143 test@icloud.test geheim /tmp/key.json
 python tests/test_e2e.py /tmp      # erwartet key.json im angegebenen Ordner
 ```
