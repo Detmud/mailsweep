@@ -1,0 +1,37 @@
+# Tests vor dem Merge (#11). Läuft auf einem eigenen Forgejo-Runner, siehe ci/runner/README.md.
+# Bewusst ohne fremde Actions (kein actions/checkout): Checkout per git, alles andere in tests/ci.sh.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: ubuntu:24.04      # gleiche Basis wie rspamd/Dockerfile, damit Rspamd 3.8 mitgetestet wird
+    timeout-minutes: 20
+    steps:
+      - name: Pakete
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            git ca-certificates openssl python3 python3-venv dovecot-imapd rspamd >/dev/null
+          python3 --version; dovecot --version; rspamd --version | head -1
+
+      - name: Checkout
+        env:
+          TOKEN: ${{ github.token }}
+          # Optional als Repo-Variable, falls der Job-Container die öffentliche Forgejo-URL nicht erreicht
+          GIT_URL: ${{ vars.CI_GIT_URL || github.server_url }}
+        run: |
+          git init -q .
+          git -c http.extraHeader="Authorization: token $TOKEN" \
+            fetch -q --depth=1 "$GIT_URL/${{ github.repository }}.git" "${{ github.sha }}"
+          git checkout -q FETCH_HEAD
+          git log -1 --oneline
+
+      - name: Tests
+        run: bash tests/ci.sh

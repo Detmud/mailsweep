@@ -1,0 +1,24 @@
+# Runner-Konfiguration für mailsweep (#11). Als data/config.yml ablegen.
+# Vollständige Vorlage mit allen Schlüsseln: forgejo-runner generate-config
+log:
+  level: info
+
+server:
+  connections:
+    mailsweep:
+      url: https://git.home.arpa/
+      uuid: "UUID aus Forgejo"          # Repo → Einstellungen → Actions → Runner → Neuen Runner erstellen
+      token: "TOKEN aus Forgejo"        # wird nur einmal angezeigt; nicht in Git einchecken
+
+runner:
+  file: /data/.runner
+  capacity: 1                           # ein Job gleichzeitig reicht
+  timeout: 30m
+  labels:
+    - "docker:docker://ubuntu:24.04"    # runs-on: docker in .forgejo/workflows/test.yml
+
+container:
+  docker_host: "-"                      # Jobs bekommen keinen Docker-Socket
+  privileged: false
+  network: ""                           # eigenes Netz pro Job
+  valid_volumes: []                     # Jobs dürfen nichts vom Host einhängen
