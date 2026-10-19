@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS messages (
     auth_dkim_domain TEXT   NOT NULL DEFAULT '',
     spam_score      REAL,                   -- NULL = noch nicht bewertet
     spam_symbols    TEXT    NOT NULL DEFAULT '',
+    spam_learned    TEXT    NOT NULL DEFAULT '',  -- 'spam' | 'ham' | 'skip' (#12)
     PRIMARY KEY (folder, uid)
 );
 CREATE INDEX IF NOT EXISTS idx_msg_from ON messages(from_addr);
@@ -95,13 +96,14 @@ CREATE TABLE IF NOT EXISTS log (
 """
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Spalten, die nach Schema 3 dazugekommen sind. Sie werden per ALTER TABLE ergänzt,
 # der Header-Cache bleibt dabei erhalten.
 ADDED_COLUMNS = {
     "spam_score": "REAL",
     "spam_symbols": "TEXT NOT NULL DEFAULT ''",
+    "spam_learned": "TEXT NOT NULL DEFAULT ''",
 }
 
 
@@ -199,3 +201,18 @@ def add_log(action: str, target: str, detail: str = "", ok: bool = True) -> None
             "INSERT INTO log(ts, action, target, detail, ok) VALUES (?,?,?,?,?)",
             (int(time.time()), action, target, detail[:2000], 1 if ok else 0),
         )
+
+
+def add_counter(con, key: str, n: int) -> None:
+    """Zählt einen Wert in meta hoch (z. B. angelernte Mails, #12)."""
+    if n:
+        con.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + ?",
+            (key, str(n), n),
+        )
+
+
+def get_counter(con, key: str) -> int:
+    row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    return int(row[0]) if row else 0

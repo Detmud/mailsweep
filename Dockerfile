@@ -1,7 +1,7 @@
 # mailsweep: lokales Abmelde-Dashboard für iCloud/IMAP
 FROM python:3.12-slim
 
-ARG VERSION=1.5.0
+ARG VERSION=1.6.0
 LABEL org.opencontainers.image.title="mailsweep" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.description="Lokales Abmelde- und Aufräum-Dashboard für iCloud/IMAP"

@@ -1,5 +1,6 @@
 mailsweep.env
 .env
+redis/
 data/
 tests/
 **/__pycache__

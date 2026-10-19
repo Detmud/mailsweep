@@ -63,6 +63,7 @@
       <label class="chk"><input type="checkbox" id="showKept"> ausgeblendete zeigen</label>
       <label class="chk spam-only"><input type="checkbox" id="onlySpam"> nur Spam-Verdacht</label>
       <button class="btn sm danger spam-only" id="spamTrashBtn" type="button">Spam-Verdacht löschen</button>
+      <span class="muted spam-only" id="spamLearn"></span>
     </div>
     <p class="hint warn hidden" id="spamHint"></p>
 
@@ -70,6 +71,7 @@
       <span id="bulkCount"></span>
       <button class="btn sm" data-bulk="archive">Archivieren</button>
       <button class="btn sm danger" data-bulk="trash">In Papierkorb</button>
+      <button class="btn sm danger spam-only" data-bulk="spam" title="Als Spam anlernen und in den Papierkorb">Spam melden</button>
       <button class="btn sm ghost" data-bulk="keep">Ausblenden</button>
       <button class="btn sm ghost" data-bulk="rule-archive">Regel: künftig archivieren</button>
       <button class="btn sm ghost" data-bulk="rule-trash">Regel: künftig löschen</button>

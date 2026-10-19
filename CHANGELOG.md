@@ -2,6 +2,16 @@
 
 Versionsschema: MAJOR.MINOR.PATCH. Die laufende Version steht oben in der Weboberfläche und im Container-Log.
 
+## 1.6.0 (2026-10-19)
+- Neu (#12): Spam anlernen mit Bayes. „Spam melden“ (Detailbereich und Mehrfachauswahl) lernt die Mails eines Absenders als Spam an und schiebt sie in den Papierkorb. „Spam-Verdacht löschen“ lernt ebenfalls an. Mails ausgeblendeter Absender lernt der nächste Sync als Ham an. Höchstens 100 Mails pro Aktion bzw. Sync (`SPAM_LEARN_MAX`), jede Mail nur einmal.
+- Bayes wirkt erst ab 200 angelernten Mails je Klasse. Der Stand steht neben „Spam-Verdacht löschen“.
+- Neuer Container `mailsweep-redis` im Profil `spam` für die Bayes-Daten: aus dem Ubuntu-Paket gebaut, ohne Netz, nur per Unix-Socket für Rspamd erreichbar. mailsweep selbst kommt an Redis nicht heran.
+- Anlernen braucht `RSPAMD_PASSWORD` in der Env-Datei (bei Komodo als Secret). Damit läuft der Rspamd-Controller im internen Netz mit Passwort. Ohne Passwort bleibt der Controller aus und mailsweep lernt nichts.
+- Neu (#12): Score-Regel „Spam: automatisch löschen“, standardmäßig aus. Nach jedem Sync wandern Mails ab der Auto-Schwelle (Standard 15, mindestens 6) in den Papierkorb, ausgeblendete Absender ausgenommen. Die Regel lernt nichts an.
+- Im Testmodus wird nichts als Spam angelernt, weil auch nichts gelöscht wird. Ham aus ausgeblendeten Absendern wird auch im Testmodus angelernt.
+- Schema 5: neue Spalte für den Anlern-Stand, der Cache bleibt erhalten.
+- Neuer Test `tests/test_learn.py`, mit Fake-Rspamd oder echtem Rspamd plus Redis.
+
 ## 1.5.0 (2026-10-19)
 - Neu (#3): optionaler Spamfilter mit lokalem Rspamd, standardmäßig aus. Aktivieren mit `COMPOSE_PROFILES=spam` und `SPAM_FILTER=true`.
 - mailsweep lädt für Mails der letzten 30 Tage die ersten 512 KB per `BODY.PEEK` (kein Gelesen-Flag), lässt sie von Rspamd bewerten und speichert nur Score und Regelnamen. Pro Sync höchstens 300 Mails, der Rest folgt beim nächsten Sync.

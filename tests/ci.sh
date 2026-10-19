@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Alle Tests in einem Rutsch, für den Forgejo-Runner (#11) und lokal.
 #
-# Braucht: root, python3 (>= 3.12) mit venv, dovecot-imapd, openssl, optional rspamd.
+# Braucht: root, python3 (>= 3.12) mit venv, dovecot-imapd, openssl, optional rspamd und redis-server.
 # Startet einen eigenen Dovecot auf 127.0.0.1:10143 mit frischem Postfach in einem
-# Temp-Verzeichnis. Port 10143 und 11333 müssen dafür frei sein.
-# Mit rspamd im PATH läuft test_spam.py zusätzlich gegen einen echten Rspamd mit der
-# Konfiguration aus rspamd/, ohne /etc/rspamd anzufassen.
+# Temp-Verzeichnis. Die Ports 10143, 11333 und 11334 müssen dafür frei sein.
+# Mit rspamd und redis-server im PATH laufen test_spam.py und test_learn.py zusätzlich gegen
+# einen echten Rspamd mit der Konfiguration aus rspamd/ und Redis per Unix-Socket, ohne
+# /etc/rspamd anzufassen.
 #
 # Aufruf: bash tests/ci.sh     (aus dem Repo-Wurzelverzeichnis oder von überall)
 #   CI_SKIP_RSPAMD=1           echten Rspamd auslassen
@@ -18,11 +19,12 @@ PIDS=()
 cleanup() {
   local rc=$? p f
   if [ "$rc" != 0 ]; then  # bei Fehlern die Dienst-Logs zeigen
-    for f in "$WORK/dc/dovecot.log" "$WORK/rspamd/rspamd.log"; do
+    for f in "$WORK/dc/dovecot.log" "$WORK/rspamd/rspamd.log" "$WORK/redis/redis.log"; do
       [ -f "$f" ] && { echo "--- $f"; tail -30 "$f"; }
     done
   fi
   [ -f "$WORK/dc/run/master.pid" ] && PIDS+=("$(cat "$WORK/dc/run/master.pid")")
+  [ -f "$WORK/redis/redis.pid" ] && PIDS+=("$(cat "$WORK/redis/redis.pid")")
   for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
   for _ in $(seq 1 20); do  # bis zu 10 s warten, bis Dovecot und Rspamd weg sind
     local alive=0
@@ -72,7 +74,7 @@ step "test_net.py"
 "$PY" tests/test_net.py
 
 # ---------------------------------------------------------------- Dovecot
-for p in 10143 11333; do
+for p in 10143 11333 11334; do
   if port_open $p; then echo "Port $p ist schon belegt, bitte den laufenden Test-Dienst stoppen." >&2; exit 1; fi
 done
 
@@ -95,23 +97,40 @@ step "test_e2e.py"
 step "test_spam.py (Fake-Rspamd)"
 "$PY" tests/test_spam.py
 
-# ---------------------------------------------------------------- echter Rspamd
-if [ -z "${CI_SKIP_RSPAMD:-}" ] && command -v rspamd >/dev/null; then
-  step "Rspamd mit rspamd/ starten"
+step "test_learn.py (Fake-Rspamd)"
+"$PY" tests/test_learn.py
+
+# ---------------------------------------------------------------- echter Rspamd + Redis
+if [ -z "${CI_SKIP_RSPAMD:-}" ] && command -v rspamd >/dev/null && command -v redis-server >/dev/null; then
+  step "Redis und Rspamd mit rspamd/ starten"
   RS="$WORK/rspamd"
-  mkdir -p "$RS/conf" "$RS/db" "$RS/run"
+  RD="$WORK/redis"
+  mkdir -p "$RS/conf" "$RS/db" "$RS/run" "$RD"
+  RDUSER=redis; id "$RDUSER" >/dev/null 2>&1 || RDUSER=root
+  chown "$RDUSER" "$RD"
+  # wie im Container: kein TCP, nur Unix-Socket
+  su -s /bin/sh "$RDUSER" -c "redis-server --port 0 --unixsocket $RD/redis.sock --unixsocketperm 777 \
+    --dir $RD --save '' --daemonize yes --pidfile $RD/redis.pid --logfile $RD/redis.log"
+  for _ in $(seq 1 20); do [ -S "$RD/redis.sock" ] && break; sleep 0.5; done
   cp -r rspamd/local.d rspamd/override.d "$RS/conf/"
+  sed -i "s|/run/redis/redis.sock|$RD/redis.sock|" "$RS/conf/local.d/classifier-bayes.conf"
   RUSER=_rspamd; id "$RUSER" >/dev/null 2>&1 || RUSER=rspamd
   chown -R "$RUSER" "$RS/db" "$RS/run"
   VARS=("--var=LOCAL_CONFDIR=$RS/conf" "--var=DBDIR=$RS/db" "--var=RUNDIR=$RS/run")
+  export RSPAMD_CONTROLLER_PASSWORD
+  RSPAMD_CONTROLLER_PASSWORD=$(python3 -c "import secrets; print(secrets.token_hex(16))")
   rspamadm "${VARS[@]}" configtest
   rspamd -f -u "$RUSER" -g "$RUSER" "${VARS[@]}" > "$RS/rspamd.log" 2>&1 &
   PIDS+=($!)
-  wait_port 11333 Rspamd || { tail -50 "$RS/rspamd.log"; exit 1; }
+  wait_port 11333 Rspamd || exit 1
+  wait_port 11334 Rspamd-Controller || exit 1
   step "test_spam.py (echter Rspamd)"
   RSPAMD_URL=http://127.0.0.1:11333 "$PY" tests/test_spam.py
+  step "test_learn.py (echter Rspamd mit Redis)"
+  RSPAMD_URL=http://127.0.0.1:11333 RSPAMD_CONTROLLER_URL=http://127.0.0.1:11334 \
+    RSPAMD_PASSWORD="$RSPAMD_CONTROLLER_PASSWORD" "$PY" tests/test_learn.py
 else
-  echo "Rspamd nicht installiert oder ausgelassen, nur Fake-Rspamd getestet."
+  echo "Rspamd oder Redis nicht installiert oder ausgelassen, nur Fake-Rspamd getestet."
 fi
 
 step "ALLES GRÜN"
