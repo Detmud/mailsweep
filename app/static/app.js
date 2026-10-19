@@ -91,18 +91,18 @@ function dialog(title, body, buttons) {
 // Zustand
 // ---------------------------------------------------------------------------
 const S = {
-  group: "addr", q: "", sort: "count", folder: "", onlyUnsub: false, showKept: false, hideUnsub: false,
+  group: "addr", q: "", sort: "count", folder: "", onlyUnsub: false, onlySpam: false, showKept: false, hideUnsub: false,
   offset: 0, limit: 100, rows: [], total: 0, sel: new Set(), status: null, special: {}, folders: [],
   maxCnt: 1, lastFinished: 0,
 };
 try {
   const saved = JSON.parse(localStorage.getItem("mailsweep.view") || "{}");
-  for (const k of ["group", "sort", "onlyUnsub", "showKept", "hideUnsub"]) if (k in saved) S[k] = saved[k];
+  for (const k of ["group", "sort", "onlyUnsub", "onlySpam", "showKept", "hideUnsub"]) if (k in saved) S[k] = saved[k];
 } catch { /* egal */ }
 function saveView() {
   try {
     localStorage.setItem("mailsweep.view", JSON.stringify({
-      group: S.group, sort: S.sort, onlyUnsub: S.onlyUnsub, showKept: S.showKept, hideUnsub: S.hideUnsub,
+      group: S.group, sort: S.sort, onlyUnsub: S.onlyUnsub, onlySpam: S.onlySpam, showKept: S.showKept, hideUnsub: S.hideUnsub,
     }));
   } catch { /* egal */ }
 }
@@ -123,6 +123,7 @@ async function loadStatus() {
     $("#stBytes").textContent = fmtBytes(st.bytes);
     $("#stSenders").textContent = nf.format(st.senders);
     $("#stUnsub").textContent = nf.format(st.senders_with_unsub);
+    renderSpamInfo(st.spam || {});
 
     const sy = st.sync;
     const prog = $("#progress");
@@ -181,7 +182,7 @@ async function loadSenders(reset = true, quiet = false) {
   if (reset) { S.offset = 0; if (!quiet) S.sel.clear(); }
   const seq = ++loadSeq;
   const p = new URLSearchParams({
-    group: S.group, q: S.q, sort: S.sort, only_unsub: S.onlyUnsub, show_kept: S.showKept,
+    group: S.group, q: S.q, sort: S.sort, only_unsub: S.onlyUnsub, only_spam: S.spam && S.spam.enabled && S.onlySpam, show_kept: S.showKept,
     show_unsubscribed: !S.hideUnsub, folder: S.folder,
     limit: reset ? Math.max(S.limit, quiet ? S.rows.length : 0) : S.limit, offset: reset ? 0 : S.offset,
   });
@@ -232,6 +233,46 @@ function dkimBadge(r) {
   return h("span", { class: "badge err", title: "Keine gültige DKIM-Signatur laut Mailserver" }, "fehlt");
 }
 
+function spamBadge(r) {
+  const sp = S.spam || {};
+  if (!r.spam_known) return h("span", { class: "muted", title: `Noch nicht bewertet. Bewertet werden Mails der letzten ${sp.max_age_days || "?"} Tage.` }, "–");
+  const score = Number(r.spam_max).toLocaleString("de-DE", { maximumFractionDigits: 1 });
+  const tip = `Höchster Score ${score}, ${nf.format(r.spam_hits)} von ${nf.format(r.spam_known)} bewerteten Mails ab Schwelle ${sp.threshold}`;
+  if (r.spam_hits) return h("span", { class: "badge err", title: tip }, score);
+  if (r.spam_max >= (sp.threshold || 6) / 2) return h("span", { class: "badge warn", title: tip }, score);
+  return h("span", { class: "badge ok", title: tip }, score);
+}
+
+function renderSpamInfo(sp) {
+  S.spam = sp;
+  document.body.classList.toggle("spam-on", !!sp.enabled);
+  const hint = $("#spamHint");
+  if (sp.enabled && sp.error) {
+    hint.textContent = `Spamfilter: ${sp.error}. Läuft der Rspamd-Container (COMPOSE_PROFILES=spam)?`;
+    hint.classList.remove("hidden");
+  } else hint.classList.add("hidden");
+  const b = $("#spamTrashBtn");
+  b.textContent = `Spam-Verdacht löschen (${nf.format(sp.suspect || 0)})`;
+  b.disabled = !sp.suspect;
+  b.title = sp.enabled ? `${nf.format(sp.scored || 0)} Mails bewertet, ${nf.format(sp.pending || 0)} warten, Schwelle ${sp.threshold}` : "";
+}
+
+async function doSpamTrash() {
+  try {
+    const p = await api("/api/spam/trash", { method: "POST", body: { preview: true } });
+    if (!p.count) { toast("Keine Mail über der Spam-Schwelle"); return; }
+    const v = await dialog("Spam-Verdacht löschen", [
+      `${nf.format(p.count)} Mails von ${nf.format(p.senders)} Absendern (${fmtBytes(p.bytes)}) mit Spam-Score ab ${p.min_score} in den Papierkorb verschieben?`,
+      h("p", { class: "muted" }, `Ziel: „${p.target || "Papierkorb"}“, 30 Tage wiederherstellbar. Ausgeblendete Absender bleiben unangetastet. Vorher prüfen: Filter „nur Spam-Verdacht“.`),
+    ], [["Abbrechen", "", "ghost"], ["In Papierkorb", "ok", "danger"]]);
+    if (v !== "ok") return;
+    const r = await api("/api/spam/trash", { method: "POST", body: { min_score: p.min_score } });
+    toast(`${r.dry_run ? "[DRY-RUN] " : ""}${nf.format(r.moved)} Mails nach „${r.target}“ verschoben`);
+    await loadSenders(true, true);
+    loadStatus();
+  } catch (e) { toast(e.message, true); }
+}
+
 function renderSenders() {
   const tb = $("#senderRows");
   const isAddr = S.group === "addr";
@@ -261,6 +302,7 @@ function renderSenders() {
       h("td", { class: "hide-m" }, ...methodBadges(r)),
       h("td", { class: "hide-s" }, ...statusBadges(r)),
       h("td", { class: "hide-m" }, dkimBadge(r)),
+      h("td", { class: "hide-m spam-only" }, spamBadge(r)),
       h("td", { class: "c-act" }, actions),
     );
   }));
@@ -429,13 +471,13 @@ async function openDrawer(row) {
   $("#dTitle").textContent = row.name || key;
   $("#dSub").textContent = `${key} · ${nf.format(row.cnt)} Mails · ${fmtBytes(row.bytes)}`;
   const isAddr = S.group === "addr";
-  $("#dActions").replaceChildren(
+  $("#dActions").replaceChildren(...[
     isAddr && row.has_unsub ? h("button", { class: "btn sm", onclick: () => { closeDrawer(); doUnsubscribe(key); } }, "Abmelden") : null,
     h("button", { class: "btn sm ghost", onclick: async () => { if (await doAction([key], "archive")) closeDrawer(); } }, "Archivieren"),
     h("button", { class: "btn sm ghost", onclick: async () => { if (await doAction([key], "trash")) closeDrawer(); } }, "In Papierkorb"),
     h("button", { class: "btn sm ghost", onclick: () => ruleFromDrawer(key, "archive") }, "Regel: archivieren"),
     h("button", { class: "btn sm ghost", onclick: () => ruleFromDrawer(key, "trash") }, "Regel: löschen"),
-  );
+  ].filter(Boolean));  // replaceChildren(null) würde den Text „null“ einfügen
   $("#dBody").replaceChildren(h("p", { class: "muted" }, "Lade …"));
   $("#drawer").classList.remove("hidden"); $("#scrim").classList.remove("hidden");
   try {
@@ -445,7 +487,7 @@ async function openDrawer(row) {
     parts.push(h("ul", { class: "mlist" }, ...d.messages.map(m => h("li", {},
       h("span", { class: "s", title: m.subject }, m.subject || "(kein Betreff)"),
       h("span", { class: "d" }, dtfl.format(new Date(m.date * 1000))),
-      h("span", { class: "f" }, `${m.folder} · ${fmtBytes(m.size)}${isAddr ? "" : " · " + m.from_addr}${m.list_id ? " · " + m.list_id : ""}`),
+      h("span", { class: "f", title: m.spam_symbols || "" }, `${m.folder} · ${fmtBytes(m.size)}${isAddr ? "" : " · " + m.from_addr}${m.list_id ? " · " + m.list_id : ""}${m.spam_score != null ? " · Spam " + Number(m.spam_score).toLocaleString("de-DE", { maximumFractionDigits: 1 }) : ""}`),
     ))));
     if (d.addresses.length > 1 || !isAddr) {
       parts.push(h("h4", {}, "Adressen"));
@@ -656,7 +698,7 @@ function initControls() {
   $("#sort").value = S.sort;
   $("#sort").addEventListener("change", e => { S.sort = e.target.value; saveView(); loadSenders(); });
   $("#folder").addEventListener("change", e => { S.folder = e.target.value; loadSenders(); });
-  for (const [id, k] of [["onlyUnsub", "onlyUnsub"], ["showKept", "showKept"], ["hideUnsubscribed", "hideUnsub"]]) {
+  for (const [id, k] of [["onlyUnsub", "onlyUnsub"], ["onlySpam", "onlySpam"], ["showKept", "showKept"], ["hideUnsubscribed", "hideUnsub"]]) {
     $("#" + id).checked = S[k];
     $("#" + id).addEventListener("change", e => { S[k] = e.target.checked; saveView(); loadSenders(); });
   }
@@ -671,6 +713,7 @@ function initControls() {
     else doAction([...S.sel], a);
   }));
   $("#moreBtn").addEventListener("click", () => loadSenders(false));
+  $("#spamTrashBtn").addEventListener("click", doSpamTrash);
   $("#dryrun").addEventListener("click", () => showTab("settings"));
   $("#dryToggle").addEventListener("click", async () => {
     const on = $("#dryCard").classList.contains("on");
