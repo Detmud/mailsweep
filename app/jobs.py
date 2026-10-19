@@ -159,13 +159,14 @@ def _learn_ham(conn: Imap) -> None:
         _learn_error(e)
 
 
-def _learn_spam(conn: Imap, by_folder: dict[str, list[int]], label: str) -> dict | None:
+def _learn_spam(conn: Imap, by_folder: dict[str, list[int]], label: str, relearn: bool = False) -> dict | None:
     """Lernt vor dem Verschieben die neuesten Mails als Spam an. Fehler stoppen das Verschieben nicht.
-    Im Testmodus wird nicht angelernt, weil die Mails ja auch nicht gelöscht werden."""
+    Im Testmodus wird nicht angelernt, weil die Mails ja auch nicht gelöscht werden.
+    relearn: auch Mails, die bisher als Ham gelernt sind (Einzelaktion, #16)."""
     if not spam.learning_enabled() or settings.dry_run:
         return None
     with db.connect() as con:
-        rows = spam.newest(con, by_folder, settings.spam_learn_max)
+        rows = spam.newest(con, by_folder, settings.spam_learn_max, "spam" if relearn else "")
     try:
         c = spam.learn_messages(conn, rows, "spam")
         _learn_error(None)
@@ -383,6 +384,71 @@ def sender_action(group: str, keys: list[str], action: str, target_folder: str =
             raise
     prefix = "[DRY-RUN] " if settings.dry_run else ""
     db.add_log(action, ", ".join(keys)[:500], f"{prefix}{moved} Mails nach {target!r}")
+    return {"moved": moved, "target": target, "dry_run": settings.dry_run,
+            **_learn_result(learned, action == "spam")}
+
+
+# --------------------------------------------------------------------------
+# Einzelne Mails (#16)
+# --------------------------------------------------------------------------
+
+def _message_locations(con, items: list[tuple[str, int]]) -> tuple[dict[str, list[int]], set[str]]:
+    """Nur Mails, die im Cache stehen. Gibt (by_folder, Absender) zurück."""
+    wanted: dict[str, list[int]] = defaultdict(list)
+    for folder, uid in items:
+        wanted[folder].append(uid)
+    by_folder: dict[str, list[int]] = defaultdict(list)
+    senders: set[str] = set()
+    for folder, uids in wanted.items():
+        for chunk in chunked(sorted(set(uids)), 900):
+            for r in con.execute(
+                f"SELECT uid, from_addr FROM messages WHERE folder=? AND uid IN ({','.join('?' * len(chunk))})",
+                (folder, *chunk),
+            ):
+                by_folder[folder].append(r["uid"])
+                senders.add(r["from_addr"])
+    return by_folder, senders
+
+
+def message_action(items: list[tuple[str, int]], action: str) -> dict:
+    """Aktion für einzelne Mails: 'spam' (anlernen + Papierkorb), 'ham' (nur anlernen),
+    'trash', 'archive'. Spam und Ham dürfen umgelernt werden."""
+    with db.connect() as con:
+        by_folder, senders = _message_locations(con, items)
+    n = sum(len(v) for v in by_folder.values())
+    label = f"{n} einzelne Mail{'' if n == 1 else 's'} von {len(senders)} Absender{'' if len(senders) == 1 else 'n'}"
+    if not n:
+        return {"moved": 0, "learned": 0, "learn_error": "", "dry_run": settings.dry_run, "target": ""}
+
+    if action == "ham":
+        if not spam.learning_enabled():
+            raise ValueError("Anlernen ist nicht eingerichtet: Spamfilter an, Anlernen an und RSPAMD_PASSWORD gesetzt?")
+        with imap_job() as conn:
+            with db.connect() as con:
+                rows = spam.newest(con, by_folder, settings.spam_learn_max, "ham")
+            try:
+                c = spam.learn_messages(conn, rows, "ham")
+                _learn_error(None)
+            except spam.SpamError as e:
+                _learn_error(e)
+                return {"moved": 0, "learned": 0, "learn_error": str(e), "dry_run": settings.dry_run, "target": ""}
+        db.add_log("spam-learn", label, f"{c['ok'] + c['known']} Mails als Ham angelernt (Kein Spam)")
+        return {"moved": 0, "learned": c["ok"] + c["known"], "learn_error": "", "dry_run": settings.dry_run, "target": ""}
+
+    move_action = "trash" if action == "spam" else action
+    learned = None
+    with imap_job() as conn:
+        _ensure_special(conn)
+        target = resolve_target(move_action)
+        if action == "spam":
+            learned = _learn_spam(conn, by_folder, label, relearn=True)
+        try:
+            moved = move_messages(conn, by_folder, target, move_action, "manual")
+        except Exception as e:
+            db.add_log(action, label, str(e), ok=False)
+            raise
+    prefix = "[DRY-RUN] " if settings.dry_run else ""
+    db.add_log(action, label, f"{prefix}{moved} Mails nach {target!r}")
     return {"moved": moved, "target": target, "dry_run": settings.dry_run,
             **_learn_result(learned, action == "spam")}
 
