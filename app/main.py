@@ -464,6 +464,72 @@ async def api_action(req: ActionReq):
     return await asyncio.to_thread(jobs.sender_action, req.group, req.keys, req.action, req.target_folder)
 
 
+MSG_SORTS = {
+    "recent": "m.date DESC",
+    "spam": "m.spam_score IS NULL, m.spam_score DESC, m.date DESC",
+    "size": "m.size DESC, m.date DESC",
+}
+KEPT_SQL = ("EXISTS (SELECT 1 FROM sender_state s WHERE s.kept=1 AND "
+            "((s.grp='addr' AND s.key=m.from_addr) OR (s.grp='domain' AND s.key=m.org_domain)))")
+
+
+@app.get("/api/messages", dependencies=[Depends(auth)])
+def api_messages(
+    q: str = "",
+    folder: str = "",
+    only_spam: bool = False,
+    show_kept: bool = False,
+    sort: Literal["recent", "spam", "size"] = "recent",
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Einzelne Mails statt Absender (#16). Nur Header und Score, nie Inhalt."""
+    limit = max(1, min(limit, 500))
+    where, params = ["1=1"], []
+    if q:
+        where.append("(m.subject LIKE ? OR m.from_addr LIKE ? OR m.from_name LIKE ?)")
+        like = f"%{q}%"
+        params += [like, like, like]
+    if folder:
+        where.append("m.folder = ?")
+        params.append(folder)
+    if only_spam:
+        where.append("m.spam_score >= ?")
+        params.append(settings.spam_threshold)
+    if not show_kept:
+        where.append(f"NOT {KEPT_SQL}")
+    cond = " AND ".join(where)
+    with db.connect() as con:
+        total = con.execute(f"SELECT COUNT(*) FROM messages m WHERE {cond}", params).fetchone()[0]
+        rows = [dict(r) for r in con.execute(
+            f"SELECT m.folder, m.uid, m.from_addr, m.from_name, m.subject, m.date, m.size, m.spam_score, "
+            f"m.spam_symbols, m.spam_learned, {KEPT_SQL} AS kept FROM messages m WHERE {cond} "
+            f"ORDER BY {MSG_SORTS[sort]} LIMIT ? OFFSET ?",
+            [*params, limit, max(0, offset)],
+        )]
+    return {"total": total, "rows": rows}
+
+
+class MsgRef(BaseModel):
+    folder: str = Field(min_length=1, max_length=500)
+    uid: int = Field(ge=1)
+
+
+class MsgActionReq(BaseModel):
+    items: list[MsgRef] = Field(min_length=1, max_length=500)
+    action: Literal["spam", "ham", "trash", "archive"]
+
+
+@app.post("/api/messages/action", dependencies=[Depends(auth)])
+async def api_messages_action(req: MsgActionReq):
+    if req.action in ("spam", "ham") and not settings.spam_filter:
+        raise HTTPException(400, "Spamfilter ist aus (Einstellungen → Spamfilter).")
+    try:
+        return await asyncio.to_thread(jobs.message_action, [(i.folder, i.uid) for i in req.items], req.action)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 class UnsubReq(BaseModel):
     addr: str
     method: Literal["auto", "oneclick", "mailto"] = "auto"
