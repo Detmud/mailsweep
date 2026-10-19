@@ -8,6 +8,7 @@ Lokales Abmelde- und Aufräum-Dashboard für dein iCloud-Postfach, à la Leave M
 - **Archivieren / Papierkorb** pro Absender, Domain oder als Sammelaktion. Nichts wird endgültig gelöscht: Papierkorb heißt iCloud-Ordner „Deleted Messages“ (30 Tage wiederherstellbar).
 - **Regeln** („künftig archivieren/löschen“) laufen nach jedem Sync über die analysierten Ordner und fangen Nachzügler ab.
 - Protokoll aller Aktionen, `DRY_RUN`-Modus zum gefahrlosen Ausprobieren
+- optional: **Spamfilter** mit lokalem Rspamd ohne Internetzugang (ab 1.5.0, standardmäßig aus)
 
 Netzwerkverkehr nach außen: IMAP/SMTP zu Apple, DNS-Abfragen für DKIM-Schlüssel und die Abmelde-Requests selbst. Sonst nichts, keine CDNs, keine Telemetrie.
 
@@ -17,7 +18,42 @@ Netzwerkverkehr nach außen: IMAP/SMTP zu Apple, DNS-Abfragen für DKIM-Schlüss
 
 account.apple.com → Anmelden und Sicherheit → App-spezifische Passwörter → „mailsweep“. Das Passwort lässt sich dort jederzeit widerrufen und gibt keinen Zugriff auf deinen Apple Account.
 
-### 2. Dateien auf die Komodo-VM kopieren
+### 2. Forgejo-Zugang für Komodo
+
+Komodo klont das Repo selbst. Dafür braucht es einen Forgejo-User mit Lesezugriff:
+
+- Forgejo: User `Komodo` anlegen (aktiv), im Repo `home.arpa/mailsweep` unter Einstellungen → Mitarbeiter mit Recht **Lesen** hinzufügen.
+- Als dieser User ein Token mit Scope `read:repository` erzeugen.
+- Komodo → Settings → Git Accounts: Domain `192.168.10.15:3300`, **HTTPS aus**, User `Komodo`, Token aus dem Schritt davor. Komodo klont direkt von Forgejo auf demselben Host, an Caddy und dessen interner CA vorbei.
+
+### 3. Stack in Komodo anlegen
+
+- Stacks → New Stack → Name `mailsweep`, Server `komodo-local`
+- Source **Git Repo**: Git Account aus Schritt 2, Repo `home.arpa/mailsweep`, Branch `main`, Compose File `compose.yaml`
+- **Environment**: Inhalt von `mailsweep.env.example` eintragen und anpassen. Passwörter nicht im Klartext, sondern als Secret-Variablen (Komodo → Settings → Variables, Haken *Secret*) und im Feld als `[[MAILSWEEP_IMAP_PASSWORD]]` bzw. `[[MAILSWEEP_UI_PASSWORD]]` referenzieren. Komodo schreibt das Feld beim Deploy nach `.env`, `compose.yaml` liest genau diese Datei.
+- **Poll for Updates / Auto Update aus**: Das Image wird lokal gebaut, es gibt keine Registry. Neue Versionen kommen über den Webhook (Schritt 4).
+- Deploy. Komodo baut das Image beim ersten Deploy (ca. 1 Minute).
+
+`IMAP_USER` ist deine iCloud-Mail-Hauptadresse (bei alten MobileMe-Accounts ggf. `…@me.com`). Schlägt der Login fehl, den Teil vor dem `@` probieren.
+
+Tipp für den ersten Lauf: `DRY_RUN=true` oder den Testmodus in der App einschalten. Dann siehst du alles, aber nichts wird verschoben oder abgemeldet.
+
+### 4. Automatisch deployen per Webhook
+
+Ziel: Ein Merge nach `main` landet ohne Handarbeit auf dem Host.
+
+1. **Forgejo darf ins LAN senden:** Im Forgejo-Stack `FORGEJO__webhook__ALLOWED_HOST_LIST=private` setzen und Forgejo neu deployen. Der Standard `external` blockt Ziele wie 192.168.x.x.
+2. **Webhook im Repo:** Einstellungen → Webhooks → Forgejo. Ziel-URL steht in Komodo im Stack unter *Webhooks* (Form `http://192.168.10.15:9120/listener/github/stack/<Stack-ID>/deploy`). Inhaltstyp `application/json`, Secret = `KOMODO_WEBHOOK_SECRET` aus der Komodo-Core-Konfiguration, nur Push-Events, Branch-Filter `main`.
+3. **Komodo:** Im Stack unter *Webhooks* „Webhook Enabled“ und **„Webhook Force Deploy“** einschalten. Ohne Force Deploy führt Komodo nur „Deploy if changed“ aus und vergleicht dabei die Compose-Datei. Bei mailsweep ändert sich meist nur Code, die Compose-Datei bleibt gleich, und der Webhook bewirkt dann nichts.
+4. **Test:** Einen PR mergen. In Komodo erscheint unter Updates ein `DeployStack`, danach steht oben in der App die neue Version.
+
+Wichtig: Ab jetzt heißt jeder Push nach `main` „live“. Deshalb `main` schützen: Repo-Einstellungen → Branches → Schutzregel für `main`: Pushen nur per Pull Request, Merge nur nach Freigabe. Neue Funktionen kommen über eigene Branches und PRs.
+
+Ohne Komodo geht es auch direkt: `git clone`, `cp mailsweep.env.example .env`, `.env` anpassen, `sudo docker compose up -d --build`.
+
+### Notfallweg: Dateien von Hand kopieren
+
+Falls Forgejo oder der Webhook nicht verfügbar sind. Stack in Komodo dann auf Source **Files on Server** mit Run Directory `/etc/komodo/stacks/mailsweep` umstellen.
 
 Vom Mac aus, als User `detmud`:
 
@@ -33,33 +69,12 @@ sudo tar xzf ~/mailsweep.tar.gz -C /etc/komodo/stacks/
 rm ~/mailsweep.tar.gz
 # gleiche Besitzrechte wie die anderen Stacks übernehmen
 sudo chown -R --reference=/etc/komodo/stacks/glance /etc/komodo/stacks/mailsweep
-```
-
-(Alternativ per Upload in code-server nach `/etc/komodo/stacks/` und dort im Terminal entpacken.)
-
-### 3. Zugangsdaten eintragen
-
-```bash
 cd /etc/komodo/stacks/mailsweep
-sudo cp -p mailsweep.env.example .env
-sudo chmod 600 .env
+sudo cp -p mailsweep.env.example .env && sudo chmod 600 .env
 sudo nano .env              # IMAP_USER, IMAP_PASSWORD, UI_PASSWORD setzen
 ```
 
-`IMAP_USER` ist deine iCloud-Mail-Hauptadresse (bei alten MobileMe-Accounts ggf. `…@me.com`). Schlägt der Login fehl, den Teil vor dem `@` probieren.
-
-Tipp für den ersten Lauf: `DRY_RUN=true`. Dann siehst du alles, aber nichts wird verschoben oder abgemeldet. Wenn die Liste plausibel aussieht, auf `false` stellen und neu deployen.
-
-### 4. Stack in Komodo anlegen
-
-- Stacks → New Stack → Name `mailsweep`, Server `komodo-local`
-- Modus **Files on Server**, Run Directory `/etc/komodo/stacks/mailsweep`
-- **Auto Update / Poll for Updates aus**: Das Image wird lokal gebaut, es gibt keine Registry.
-- Deploy. Komodo baut das Image beim ersten Deploy (ca. 1 Minute).
-
-Ohne Komodo geht es auch direkt: `sudo docker compose up -d --build` im Ordner.
-
-Updates des Codes: Dateien ersetzen, in Komodo „Redeploy“. `pull_policy: build` sorgt dafür, dass neu gebaut wird.
+Danach in Komodo „Redeploy“. `pull_policy: build` sorgt dafür, dass neu gebaut wird.
 
 ### 5. Caddy
 
@@ -99,6 +114,22 @@ Klappt das Abmelden nicht, zeigt der Dialog, was stattdessen geht: Link selbst �
 
 Echter Spam gehört nicht abgemeldet, sondern gelöscht: Ein Abmeldeklick bestätigt dem Spammer nur, dass deine Adresse aktiv ist. mailsweep verweigert das automatische Abmelden bei ungültiger oder fremder Signatur.
 
+### Spamfilter (optional)
+
+Für Spam ohne Abmeldelink kann mailsweep jede neue Mail von einem lokalen Rspamd bewerten lassen. Einschalten in der Env-Datei (bei Komodo im Feld *Environment*):
+
+```
+COMPOSE_PROFILES=spam
+SPAM_FILTER=true
+```
+
+Danach neu deployen. `COMPOSE_PROFILES=spam` startet den Container `mailsweep-rspamd` mit, `SPAM_FILTER` schaltet die Bewertung ein (auch unter Einstellungen änderbar).
+
+- Bewertet werden Mails der letzten 30 Tage, pro Sync höchstens 300. Dafür lädt mailsweep die ersten 512 KB jeder Mail per IMAP, ohne sie als gelesen zu markieren. Gespeichert werden nur Score und Regelnamen, nie der Inhalt.
+- Rspamd hat keinen Internetzugang (Docker-Netz `internal`) und fragt keine Blocklisten oder sonstigen Dienste ab. Details und was das für die Erkennung bedeutet: `rspamd/README.md`.
+- In der Liste erscheinen die Spalte **Spam**, der Filter „nur Spam-Verdacht“ und der Knopf **Spam-Verdacht löschen**. Er verschiebt alle Mails ab der Schwelle (Standard 6) in den Papierkorb, nach einer Vorschau. Ausgeblendete Absender bleiben unangetastet.
+- Ist Rspamd nicht erreichbar, läuft der Sync trotzdem, oben steht dann ein Hinweis.
+
 ## Konfiguration
 
 Die meisten Optionen lassen sich im Tab **Einstellungen** ändern, ohne Neu-Deploy (ab 1.2.0). Werte aus der App überschreiben die Env-Datei. Zugangsdaten und UI-Passwort stehen nur in der Env-Datei `.env` (bei Komodo im Stack-Feld *Environment*, Passwörter als Secret-Variablen).
@@ -113,6 +144,9 @@ Alle Optionen stehen kommentiert in `mailsweep.env.example`. Die wichtigsten:
 | `DRY_RUN` | `false` | Nur protokollieren, nichts ausführen |
 | `ALLOW_MAILTO_UNSUBSCRIBE` | `true` | Abmelde-Mails über `smtp.mail.me.com` senden |
 | `UNSUB_FALLBACK_DNS` | `9.9.9.9` | Ausweich-DNS, falls dein DNS-Filter eine Abmelde-Domain blockt; nur auf Klick, leer = aus |
+| `SPAM_FILTER` | `false` | Spam-Bewertung mit lokalem Rspamd; braucht zusätzlich `COMPOSE_PROFILES=spam` |
+| `SPAM_THRESHOLD` | `6` | Ab diesem Rspamd-Score gilt eine Mail als Spam-Verdacht |
+| `SPAM_MAX_AGE_DAYS` / `SPAM_PER_SYNC` / `SPAM_MAX_KB` | `30` / `300` / `512` | Welche Mails bewertet werden und wie viel pro Sync und Mail geladen wird |
 | `TRUSTED_AUTHSERV_IDS` | `icloud.com` | Mailserver, deren `Authentication-Results` für die DKIM-Spalte zählen (Suffix-Vergleich) |
 | `FETCH_BATCH` | `250` | Header pro IMAP-Abruf; bei Timeouts verkleinern |
 | `UI_USER` / `UI_PASSWORD` | `admin` / leer | Basic-Auth der Weboberfläche |
@@ -124,6 +158,7 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 - **„IMAP-Login fehlgeschlagen“**: App-spezifisches Passwort prüfen, Benutzername mit/ohne Domain probieren.
 - **„Server kann weder MOVE noch UID EXPUNGE“**: Der Server unterstützt kein sicheres Verschieben. mailsweep bricht dann ab, statt fremde gelöschte Mails mit zu entfernen.
 - **Container startet nicht, Permission denied**: `apparmor:unconfined` ist im Compose bereits gesetzt; sonst Logs in Komodo ansehen.
+- **Merge nach `main`, aber keine neue Version**: In Forgejo unter Webhooks → letzte Zustellungen prüfen. Antwort 200, aber in Komodo kein `DeployStack` unter Updates: „Webhook Force Deploy“ fehlt (siehe Installation, Schritt 4). Fehler „Not allowed“ in Forgejo: `ALLOWED_HOST_LIST` fehlt. Antwort 401/403: Secret passt nicht.
 - Logs: Komodo → Stack `mailsweep` → Log, oder `docker logs mailsweep`.
 
 ## Tests
@@ -133,6 +168,7 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 ```bash
 python tests/test_net.py   # ohne Mailserver: DNS-Sperren, Ausweich-DNS, IP-Pinning mit TLS
 python tests/test_parse.py # ohne Mailserver: DKIM-Ergebnis aus Authentication-Results
+python tests/test_spam.py  # Spamfilter gegen Dovecot mit Fake-Rspamd; RSPAMD_URL=http://127.0.0.1:11333 für einen echten
 python tests/seed.py 127.0.0.1 10143 test@icloud.test geheim /tmp/key.json
 python tests/test_e2e.py /tmp      # erwartet key.json im angegebenen Ordner
 ```

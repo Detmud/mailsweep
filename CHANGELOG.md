@@ -2,6 +2,17 @@
 
 Versionsschema: MAJOR.MINOR.PATCH. Die laufende Version steht oben in der Weboberfläche und im Container-Log.
 
+## 1.5.0 (2026-10-19)
+- Neu (#3): optionaler Spamfilter mit lokalem Rspamd, standardmäßig aus. Aktivieren mit `COMPOSE_PROFILES=spam` und `SPAM_FILTER=true`.
+- mailsweep lädt für Mails der letzten 30 Tage die ersten 512 KB per `BODY.PEEK` (kein Gelesen-Flag), lässt sie von Rspamd bewerten und speichert nur Score und Regelnamen. Pro Sync höchstens 300 Mails, der Rest folgt beim nächsten Sync.
+- Rspamd läuft im eigenen Container in einem Docker-Netz ohne Internetzugang. DNS-Blocklisten, Fuzzy-Hashes, Listen von maps.rspamd.com und alle Module mit externen Abfragen sind abgeschaltet, DNS geht ins Leere. Im Test: 0 DNS-Abfragen.
+- Neue Spalte „Spam“ (höchster Score je Absender), Filter „nur Spam-Verdacht“, Sortierung nach Spam-Score, Score in den Details.
+- Sammelaktion „Spam-Verdacht löschen“: alle Mails ab der Schwelle in den Papierkorb, mit Vorschau. Ausgeblendete Absender bleiben unangetastet.
+- Ist Rspamd nicht erreichbar, läuft der Sync trotzdem durch, oben erscheint ein Hinweis.
+- Einstellungen: Spamfilter an/aus, Schwelle, Zeitraum, Bewertungen pro Sync.
+- Schema 4: neue Spalten werden ergänzt, der Header-Cache bleibt erhalten.
+- Fix: Im Detailbereich stand bei Absendern ohne Abmeldelink „null“ vor den Buttons.
+
 ## 1.4.0 (2026-10-18)
 - Fix (#1): Die DKIM-Spalte wertet jetzt alle `Authentication-Results`-Header des eigenen Mailservers aus, nicht nur den obersten. iCloud setzt pro Prüfung einen eigenen Header (bimi, dmarc, dkim-verifier, spf). Stand der DKIM-Header nicht oben, zeigte die Spalte „?“.
 - Vertrauen nach authserv-id: Gewertet werden nur Header, deren Absender in `TRUSTED_AUTHSERV_IDS` steht (Standard `icloud.com`, Suffix-Vergleich). Gefälschte Header mit fremder authserv-id zählen nicht. Ohne passenden Header gilt wie bisher der oberste.
