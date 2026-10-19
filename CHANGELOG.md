@@ -2,6 +2,10 @@
 
 Versionsschema: MAJOR.MINOR.PATCH. Die laufende Version steht oben in der Weboberfläche und im Container-Log.
 
+## 1.7.1 (2026-10-19)
+- Fix (#18): Nach einem Update hielt der Browser die alte `app.js` im Cache. Der neue Tab „Mails“ blieb dadurch leer, bis man hart neu lud. Die Seite hängt jetzt die Version an die Skript- und Stil-URLs, und Seite und Assets kommen mit `Cache-Control: no-cache`. Unveränderte Dateien liefert mailsweep weiter als 304 ohne Inhalt.
+- Neuer Test `tests/test_web.py`.
+
 ## 1.7.0 (2026-10-19)
 - Neu (#16): Tab „Mails“ mit einer Zeile pro Mail: Betreff, Absender, Datum, Ordner, Größe, Spam-Score (Regeln im Tooltip) und Anlern-Stand. Suche nach Betreff und Absender, Filter nach Ordner und „nur Spam-Verdacht“, Sortierung nach Datum, Score oder Größe.
 - Aktionen für einzelne Mails und eine Auswahl: „Spam melden“ (anlernen und Papierkorb), „Kein Spam“ (als Ham anlernen, Mail bleibt liegen), „In Papierkorb“, „Archivieren“. Damit lassen sich Spam von wechselnden Adressen und einzelne Mails eines sonst erwünschten Absenders erfassen.

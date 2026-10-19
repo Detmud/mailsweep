@@ -186,6 +186,7 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 ```bash
 python tests/test_net.py   # ohne Mailserver: DNS-Sperren, Ausweich-DNS, IP-Pinning mit TLS
 python tests/test_parse.py # ohne Mailserver: DKIM-Ergebnis aus Authentication-Results
+python tests/test_web.py   # ohne Mailserver: Auslieferung der Oberfläche, Cache-Header
 python tests/test_spam.py  # Spamfilter gegen Dovecot mit Fake-Rspamd; RSPAMD_URL=http://127.0.0.1:11333 für einen echten
 python tests/test_learn.py # Anlernen und Score-Regel, Fake-Rspamd; echt mit RSPAMD_URL, RSPAMD_CONTROLLER_URL, RSPAMD_PASSWORD
 python tests/test_mails.py # Tab Mails: Einzelaktionen und Umlernen, Fake-Rspamd; echt wie test_learn.py
