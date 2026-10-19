@@ -230,6 +230,9 @@ button.badge { border: 0; cursor: pointer; font: inherit; font-size: 11px; font-
 .authlist .badge { margin-right: 8px; }
 .authbox .small { margin: 0 0 8px; }
 
+/* Spamfilter: Elemente nur zeigen, wenn er eingeschaltet ist */
+body:not(.spam-on) .spam-only { display: none !important; }
+
 /* Dialog */
 dialog {
   border: 1px solid var(--line); border-radius: 12px; padding: 0; background: var(--surface); color: var(--ink);
