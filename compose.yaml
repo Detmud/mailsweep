@@ -39,8 +39,14 @@ services:
     restart: unless-stopped
     networks:
       - spam                    # kein Internet, kein Port nach außen
+    environment:
+      # Passwort für den Controller (Anlernen, #12). Leer = Controller aus, kein Anlernen.
+      RSPAMD_CONTROLLER_PASSWORD: ${RSPAMD_PASSWORD:-}
+    depends_on:
+      - redis
     volumes:
       - rspamd-data:/var/lib/rspamd
+      - redis-run:/run/redis    # Unix-Socket von Redis für die Bayes-Daten
     read_only: true
     tmpfs:
       - /run/rspamd:mode=1777
@@ -57,6 +63,31 @@ services:
         max-size: "5m"
         max-file: "3"
 
+  # Bayes-Daten für Rspamd (#12). Ohne Netz, nur Unix-Socket im Volume redis-run.
+  redis:
+    profiles: ["spam"]
+    build: ./redis
+    image: mailsweep-redis:local
+    pull_policy: build
+    container_name: mailsweep-redis
+    restart: unless-stopped
+    network_mode: none
+    volumes:
+      - redis-data:/var/lib/redis
+      - redis-run:/run/redis
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - apparmor:unconfined
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
 networks:
   spam:
     internal: true              # Docker-Netz ohne Weg ins Internet
@@ -64,3 +95,5 @@ networks:
 volumes:
   mailsweep-data:
   rspamd-data:
+  redis-data:
+  redis-run:
