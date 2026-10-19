@@ -123,12 +123,25 @@ COMPOSE_PROFILES=spam
 SPAM_FILTER=true
 ```
 
-Danach neu deployen. `COMPOSE_PROFILES=spam` startet den Container `mailsweep-rspamd` mit, `SPAM_FILTER` schaltet die Bewertung ein (auch unter Einstellungen änderbar).
+Danach neu deployen. `COMPOSE_PROFILES=spam` startet die Container `mailsweep-rspamd` und `mailsweep-redis` mit, `SPAM_FILTER` schaltet die Bewertung ein (auch unter Einstellungen änderbar).
 
 - Bewertet werden Mails der letzten 30 Tage, pro Sync höchstens 300. Dafür lädt mailsweep die ersten 512 KB jeder Mail per IMAP, ohne sie als gelesen zu markieren. Gespeichert werden nur Score und Regelnamen, nie der Inhalt.
 - Rspamd hat keinen Internetzugang (Docker-Netz `internal`) und fragt keine Blocklisten oder sonstigen Dienste ab. Details und was das für die Erkennung bedeutet: `rspamd/README.md`.
 - In der Liste erscheinen die Spalte **Spam**, der Filter „nur Spam-Verdacht“ und der Knopf **Spam-Verdacht löschen**. Er verschiebt alle Mails ab der Schwelle (Standard 6) in den Papierkorb, nach einer Vorschau. Ausgeblendete Absender bleiben unangetastet.
 - Ist Rspamd nicht erreichbar, läuft der Sync trotzdem, oben steht dann ein Hinweis.
+
+**Anlernen (ab 1.6.0, optional):** Mit einem Passwort in der Env-Datei lernt Rspamd aus deinen Entscheidungen:
+
+```
+RSPAMD_PASSWORD=[[MAILSWEEP_RSPAMD_PASSWORD]]   # Komodo-Secret, nur Buchstaben und Ziffern, z. B. openssl rand -hex 24
+```
+
+- **Spam melden** (im Detailbereich oder für mehrere Absender) lernt die neuesten Mails als Spam an und schiebt alle in den Papierkorb. „Spam-Verdacht löschen“ lernt ebenfalls an. Nur für echten Spam benutzen, nicht für Newsletter, die bloß nerven: Sonst lernt Bayes, legitime Newsletter als Spam zu sehen.
+- **Ausblenden** heißt „das will ich“: Der nächste Sync lernt die Mails dieses Absenders als Ham an.
+- Bayes wirkt erst ab 200 angelernten Mails je Klasse. Der Stand steht neben „Spam-Verdacht löschen“.
+- Die Bayes-Daten liegen in einem eigenen Redis-Container ohne Netz (`redis/README.md`). Gespeichert werden Wort-Hashes mit Zählern, kein Mailtext.
+
+**Automatisch löschen:** Unter Einstellungen „Spam: automatisch löschen“ einschalten. Dann wandern nach jedem Sync alle Mails ab der Auto-Schwelle (Standard 15) in den Papierkorb, ausgeblendete Absender ausgenommen. Erst einschalten, wenn die Scores ein paar Wochen gepasst haben. Im Testmodus wird nur protokolliert.
 
 ## Konfiguration
 
@@ -147,6 +160,9 @@ Alle Optionen stehen kommentiert in `mailsweep.env.example`. Die wichtigsten:
 | `SPAM_FILTER` | `false` | Spam-Bewertung mit lokalem Rspamd; braucht zusätzlich `COMPOSE_PROFILES=spam` |
 | `SPAM_THRESHOLD` | `6` | Ab diesem Rspamd-Score gilt eine Mail als Spam-Verdacht |
 | `SPAM_MAX_AGE_DAYS` / `SPAM_PER_SYNC` / `SPAM_MAX_KB` | `30` / `300` / `512` | Welche Mails bewertet werden und wie viel pro Sync und Mail geladen wird |
+| `RSPAMD_PASSWORD` | leer | Passwort für den Rspamd-Controller; leer = kein Anlernen |
+| `SPAM_LEARN` / `SPAM_LEARN_MAX` | `true` / `100` | Anlernen an/aus, höchstens so viele Mails pro Aktion bzw. Sync |
+| `SPAM_AUTO_TRASH` / `SPAM_AUTO_SCORE` | `false` / `15` | Score-Regel: Mails ab diesem Score nach jedem Sync in den Papierkorb |
 | `TRUSTED_AUTHSERV_IDS` | `icloud.com` | Mailserver, deren `Authentication-Results` für die DKIM-Spalte zählen (Suffix-Vergleich) |
 | `FETCH_BATCH` | `250` | Header pro IMAP-Abruf; bei Timeouts verkleinern |
 | `UI_USER` / `UI_PASSWORD` | `admin` / leer | Basic-Auth der Weboberfläche |
@@ -169,16 +185,17 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 python tests/test_net.py   # ohne Mailserver: DNS-Sperren, Ausweich-DNS, IP-Pinning mit TLS
 python tests/test_parse.py # ohne Mailserver: DKIM-Ergebnis aus Authentication-Results
 python tests/test_spam.py  # Spamfilter gegen Dovecot mit Fake-Rspamd; RSPAMD_URL=http://127.0.0.1:11333 für einen echten
+python tests/test_learn.py # Anlernen und Score-Regel, Fake-Rspamd; echt mit RSPAMD_URL, RSPAMD_CONTROLLER_URL, RSPAMD_PASSWORD
 python tests/seed.py 127.0.0.1 10143 test@icloud.test geheim /tmp/key.json
 python tests/test_e2e.py /tmp      # erwartet key.json im angegebenen Ordner
 ```
 
 Der Test braucht einen Dovecot mit Klartext-Login auf Port 10143 und den Ordnern `Archive` (`\Archive`) und `Deleted Messages` (`\Trash`).
 
-Alles auf einmal, mit eigenem Dovecot aus `tests/dovecot.conf` und frischem Postfach, dazu `ruff` und, falls `rspamd` installiert ist, der Spamtest gegen einen echten Rspamd mit der Konfiguration aus `rspamd/`:
+Alles auf einmal, mit eigenem Dovecot aus `tests/dovecot.conf` und frischem Postfach, dazu `ruff` und, falls `rspamd` und `redis-server` installiert sind, Spam- und Lerntest gegen einen echten Rspamd mit der Konfiguration aus `rspamd/`:
 
 ```bash
-bash tests/ci.sh   # als root; braucht python3 (3.12), python3-venv, dovecot-imapd, openssl, optional rspamd; Ports 10143 und 11333 frei
+bash tests/ci.sh   # als root; braucht python3 (3.12), python3-venv, dovecot-imapd, openssl, optional rspamd und redis-server; Ports 10143, 11333, 11334 frei
 ```
 
 ### CI
