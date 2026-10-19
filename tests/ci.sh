@@ -72,6 +72,8 @@ step "test_parse.py"
 "$PY" tests/test_parse.py
 step "test_net.py"
 "$PY" tests/test_net.py
+step "test_web.py"
+"$PY" tests/test_web.py
 
 # ---------------------------------------------------------------- Dovecot
 for p in 10143 11333 11334; do
