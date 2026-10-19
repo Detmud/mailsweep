@@ -96,7 +96,8 @@ Direkt erreichbar ist es ohnehin unter `http://192.168.10.15:8743`.
 3. **Abmelden** → mailsweep prüft die Signatur und meldet ab. Danach direkt „Archivieren + Regel“ oder „Löschen + Regel“: verschiebt die vorhandenen Mails und alles, was noch nachkommt.
 4. Absender, die du behalten willst: **Ausblenden**. Sie verschwinden aus der Liste und bleiben im Postfach unangetastet.
 5. Klick auf einen Namen öffnet die Details: letzte Betreffs, Adressen, Roh-Header.
-6. Die Spalte **Status** zeigt pro Absender, was schon passiert ist (abgemeldet, X im Papierkorb, X archiviert). Absender, deren Mails komplett verschoben wurden, verschwinden aus der Liste und stehen im Tab **Erledigt**, zusammen mit Summen, Regeln und dem, was noch im Postfach liegt („Rest löschen“). Im DRY_RUN sind diese Einträge als „Test“ markiert und verschwinden beim Umschalten auf `DRY_RUN=false`.
+6. Tab **Mails**: eine Zeile pro Mail statt pro Absender. Gut für Spam von wechselnden Adressen oder einzelne Mails eines Absenders, den du sonst behalten willst. Einzeln oder per Auswahl: Spam melden, Kein Spam, In Papierkorb, Archivieren.
+7. Die Spalte **Status** zeigt pro Absender, was schon passiert ist (abgemeldet, X im Papierkorb, X archiviert). Absender, deren Mails komplett verschoben wurden, verschwinden aus der Liste und stehen im Tab **Erledigt**, zusammen mit Summen, Regeln und dem, was noch im Postfach liegt („Rest löschen“). Im DRY_RUN sind diese Einträge als „Test“ markiert und verschwinden beim Umschalten auf `DRY_RUN=false`.
 
 Badges in der Liste:
 
@@ -138,6 +139,7 @@ RSPAMD_PASSWORD=[[MAILSWEEP_RSPAMD_PASSWORD]]   # Komodo-Secret, nur Buchstaben 
 
 - **Spam melden** (im Detailbereich oder für mehrere Absender) lernt die neuesten Mails als Spam an und schiebt alle in den Papierkorb. „Spam-Verdacht löschen“ lernt ebenfalls an. Nur für echten Spam benutzen, nicht für Newsletter, die bloß nerven: Sonst lernt Bayes, legitime Newsletter als Spam zu sehen.
 - **Ausblenden** heißt „das will ich“: Der nächste Sync lernt die Mails dieses Absenders als Ham an.
+- Im Tab **Mails** geht beides auch für einzelne Mails (ab 1.7.0): „Spam melden“ und „Kein Spam“. Letzteres korrigiert Fehlalarme, die Mail bleibt liegen. Eine schon gelernte Mail lässt sich umlernen.
 - Bayes wirkt erst ab 200 angelernten Mails je Klasse. Der Stand steht neben „Spam-Verdacht löschen“.
 - Die Bayes-Daten liegen in einem eigenen Redis-Container ohne Netz (`redis/README.md`). Gespeichert werden Wort-Hashes mit Zählern, kein Mailtext.
 
@@ -186,13 +188,14 @@ python tests/test_net.py   # ohne Mailserver: DNS-Sperren, Ausweich-DNS, IP-Pinn
 python tests/test_parse.py # ohne Mailserver: DKIM-Ergebnis aus Authentication-Results
 python tests/test_spam.py  # Spamfilter gegen Dovecot mit Fake-Rspamd; RSPAMD_URL=http://127.0.0.1:11333 für einen echten
 python tests/test_learn.py # Anlernen und Score-Regel, Fake-Rspamd; echt mit RSPAMD_URL, RSPAMD_CONTROLLER_URL, RSPAMD_PASSWORD
+python tests/test_mails.py # Tab Mails: Einzelaktionen und Umlernen, Fake-Rspamd; echt wie test_learn.py
 python tests/seed.py 127.0.0.1 10143 test@icloud.test geheim /tmp/key.json
 python tests/test_e2e.py /tmp      # erwartet key.json im angegebenen Ordner
 ```
 
 Der Test braucht einen Dovecot mit Klartext-Login auf Port 10143 und den Ordnern `Archive` (`\Archive`) und `Deleted Messages` (`\Trash`).
 
-Alles auf einmal, mit eigenem Dovecot aus `tests/dovecot.conf` und frischem Postfach, dazu `ruff` und, falls `rspamd` und `redis-server` installiert sind, Spam- und Lerntest gegen einen echten Rspamd mit der Konfiguration aus `rspamd/`:
+Alles auf einmal, mit eigenem Dovecot aus `tests/dovecot.conf` und frischem Postfach, dazu `ruff` und, falls `rspamd` und `redis-server` installiert sind, Spam-, Lern- und Mailtest gegen einen echten Rspamd mit der Konfiguration aus `rspamd/`:
 
 ```bash
 bash tests/ci.sh   # als root; braucht python3 (3.12), python3-venv, dovecot-imapd, openssl, optional rspamd und redis-server; Ports 10143, 11333, 11334 frei
