@@ -164,7 +164,8 @@ import sqlite3  # noqa: E402
 d = tempfile.mkdtemp(); path = os.path.join(d, "mailsweep.sqlite3")
 con = sqlite3.connect(path)
 con.executescript(db.SCHEMA.replace("    spam_score      REAL,                   -- NULL = noch nicht bewertet\n", "")
-                  .replace("    spam_symbols    TEXT    NOT NULL DEFAULT '',\n", ""))
+                  .replace("    spam_symbols    TEXT    NOT NULL DEFAULT '',\n", "")
+                  .replace("    spam_learned    TEXT    NOT NULL DEFAULT '',  -- 'spam' | 'ham' | 'skip' (#12)\n", ""))
 con.execute("INSERT INTO meta VALUES ('schema','3')")
 con.execute("INSERT INTO messages(folder, uid, from_addr) VALUES ('INBOX', 1, 'a@b.example')"); con.commit(); con.close()
 settings.data_dir = d
@@ -173,5 +174,6 @@ with db.connect() as con:
     cols = [r[1] for r in con.execute("PRAGMA table_info(messages)")]
     n = con.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
     v = con.execute("SELECT value FROM meta WHERE key='schema'").fetchone()[0]
-ok("spam_score" in cols and "spam_symbols" in cols and n == 1 and v == "4", f"Migration 3 -> 4 behält Cache ({n}, {v})")
+ok("spam_score" in cols and "spam_symbols" in cols and n == 1 and v == str(db.SCHEMA_VERSION),
+   f"Migration 3 -> {db.SCHEMA_VERSION} behält Cache ({n}, {v})")
 print("SPAM-TESTS OK" + (" (echter Rspamd)" if REAL else ""))

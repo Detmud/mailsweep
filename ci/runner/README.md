@@ -4,9 +4,9 @@
 
 ## Was der Job tut
 
-1. `apt-get install` von git, Python 3.12, Dovecot und Rspamd 3.8 (Ubuntu-Pakete, wie im Rspamd-Image).
+1. `apt-get install` von git, Python 3.12, Dovecot, Rspamd 3.8 und Redis (Ubuntu-Pakete, wie in den Images).
 2. Checkout per `git fetch` mit dem Job-Token. Keine fremden Actions, also kein Download von `actions/checkout` aus dem Internet.
-3. `tests/ci.sh`: `ruff`, `test_parse.py`, `test_net.py`, eigener Dovecot auf 127.0.0.1:10143 mit frischem Postfach, `seed.py`, `test_e2e.py`, `test_spam.py` mit Fake-Rspamd und noch einmal gegen einen echten Rspamd mit `rspamd/`.
+3. `tests/ci.sh`: `ruff`, `test_parse.py`, `test_net.py`, eigener Dovecot auf 127.0.0.1:10143 mit frischem Postfach, `seed.py`, `test_e2e.py`, `test_spam.py` und `test_learn.py` mit Fake-Rspamd und noch einmal gegen einen echten Rspamd mit `rspamd/` und Redis per Unix-Socket.
 
 Der Job braucht Internet für die Ubuntu-Paketquellen und PyPI. Er braucht **keine** Zugangsdaten zu iCloud und sieht keine echten Mails. Laufzeit etwa 2 bis 4 Minuten, der Großteil ist `apt-get`.
 
@@ -65,8 +65,8 @@ Erst danach geht kein ungetesteter Stand mehr live, denn jeder Merge nach `main`
 ## Lokal dasselbe ausführen
 
 ```bash
-bash tests/ci.sh                  # braucht python3 (3.12), python3-venv, dovecot-imapd, openssl, optional rspamd
+bash tests/ci.sh                  # braucht python3 (3.12), python3-venv, dovecot-imapd, openssl, optional rspamd und redis-server
 CI_SKIP_RSPAMD=1 bash tests/ci.sh # ohne echten Rspamd
 ```
 
-Das Skript muss als root laufen, weil Dovecot auf den Benutzer `vmail` wechselt (legt ihn bei Bedarf an). Die Ports 10143 und 11333 müssen frei sein. Alles landet in einem Temp-Verzeichnis, das am Ende samt Dovecot und Rspamd wieder verschwindet.
+Das Skript muss als root laufen, weil Dovecot auf den Benutzer `vmail` wechselt (legt ihn bei Bedarf an). Die Ports 10143, 11333 und 11334 müssen frei sein. Alles landet in einem Temp-Verzeichnis, das am Ende samt Dovecot und Rspamd wieder verschwindet.
