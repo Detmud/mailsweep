@@ -95,6 +95,15 @@ const S = {
   offset: 0, limit: 100, rows: [], total: 0, sel: new Set(), status: null, special: {}, folders: [],
   maxCnt: 1, lastFinished: 0,
 };
+// Tab Mails (#16): eigener Zustand, Auswahl als "Ordner\u0000UID"
+const M = { q: "", sort: "recent", folder: "", onlySpam: false, showKept: false, rows: [], total: 0, offset: 0, limit: 100, sel: new Set() };
+try {
+  const saved = JSON.parse(localStorage.getItem("mailsweep.mails") || "{}");
+  for (const k of ["sort", "onlySpam", "showKept"]) if (k in saved) M[k] = saved[k];
+} catch { /* egal */ }
+function saveMailView() {
+  try { localStorage.setItem("mailsweep.mails", JSON.stringify({ sort: M.sort, onlySpam: M.onlySpam, showKept: M.showKept })); } catch { /* egal */ }
+}
 try {
   const saved = JSON.parse(localStorage.getItem("mailsweep.view") || "{}");
   for (const k of ["group", "sort", "onlyUnsub", "onlySpam", "showKept", "hideUnsub"]) if (k in saved) S[k] = saved[k];
@@ -149,7 +158,7 @@ async function loadStatus() {
       if (sy.finished && sy.finished !== S.lastFinished) {
         const first = S.lastFinished === 0;
         S.lastFinished = sy.finished;
-        if (!first) { loadSenders(true); toast("Sync abgeschlossen"); }
+        if (!first) { loadSenders(true); if (!$("#tab-mails").classList.contains("hidden")) loadMails(true, true); toast("Sync abgeschlossen"); }
       }
     }
     // Während eines laufenden Erst-Syncs Liste regelmäßig auffrischen
@@ -171,6 +180,11 @@ async function loadFolders() {
       ...scan.map(f => h("option", { value: f }, (r.folders.find(x => x.name === f) || {}).display || f)));
     if (S.folder && !scan.includes(S.folder)) S.folder = "";
     sel.value = S.folder;
+    const msel = $("#mfolder");
+    msel.replaceChildren(h("option", { value: "" }, "Alle Ordner"),
+      ...scan.map(f => h("option", { value: f }, (r.folders.find(x => x.name === f) || {}).display || f)));
+    if (M.folder && !scan.includes(M.folder)) M.folder = "";
+    msel.value = M.folder;
     $("#ruleTarget").replaceChildren(...r.folders.map(f => h("option", { value: f.name }, f.display)));
   } catch (e) { /* Ordner kommen nach dem ersten Sync */ }
 }
@@ -264,6 +278,7 @@ function renderSpamInfo(sp) {
   }
   if (sp.auto && sp.auto.enabled) parts.push(`Auto-Löschen ab Score ${sp.auto.score}`);
   info.textContent = parts.join(" · ");
+  $("#mLearn").textContent = ln.enabled ? parts[0] : "";
   info.title = ln.enabled ? "„Spam melden“ und „Spam-Verdacht löschen“ lernen Spam an, ausgeblendete Absender werden beim Sync als Ham angelernt."
     : (ln.configured ? "Anlernen ist in den Einstellungen aus." : "Zum Anlernen RSPAMD_PASSWORD in der Env-Datei setzen (bei Komodo als Secret) und neu deployen.");
   const b = $("#spamTrashBtn");
@@ -489,6 +504,124 @@ function unsubResultDialog(addr, r) {
 }
 
 // ---------------------------------------------------------------------------
+// Tab Mails: einzelne Mails statt Absender (#16)
+// ---------------------------------------------------------------------------
+const mkey = m => `${m.folder}\u0000${m.uid}`;
+let mSeq = 0;
+async function loadMails(reset = true, quiet = false) {
+  if (reset) { M.offset = 0; if (!quiet) M.sel.clear(); }
+  const seq = ++mSeq;
+  const spamOn = !!(S.spam && S.spam.enabled);
+  const p = new URLSearchParams({
+    q: M.q, folder: M.folder, only_spam: spamOn && M.onlySpam, show_kept: M.showKept,
+    sort: !spamOn && M.sort === "spam" ? "recent" : M.sort,
+    limit: reset ? Math.max(M.limit, quiet ? M.rows.length : 0) : M.limit, offset: reset ? 0 : M.offset,
+  });
+  try {
+    const r = await api("/api/messages?" + p);
+    if (seq !== mSeq) return;
+    M.total = r.total;
+    M.rows = reset ? r.rows : M.rows.concat(r.rows);
+    M.offset = M.rows.length;
+    const present = new Set(M.rows.map(mkey));
+    for (const k of [...M.sel]) if (!present.has(k)) M.sel.delete(k);
+    renderMails();
+  } catch (e) { toast(e.message, true); }
+}
+
+function mailScore(m) {
+  const sp = S.spam || {};
+  if (m.spam_score == null) return h("span", { class: "muted", title: `Noch nicht bewertet. Bewertet werden Mails der letzten ${sp.max_age_days || "?"} Tage.` }, "–");
+  const score = Number(m.spam_score).toLocaleString("de-DE", { maximumFractionDigits: 1 });
+  const thr = sp.threshold || 6;
+  const cls = m.spam_score >= thr ? "err" : m.spam_score >= thr / 2 ? "warn" : "ok";
+  return h("span", { class: "badge " + cls, title: m.spam_symbols || "keine auffälligen Regeln" }, score);
+}
+
+function learnedBadge(m) {
+  if (m.spam_learned === "spam") return h("span", { class: "badge err", title: "Als Spam angelernt" }, "Spam gelernt");
+  if (m.spam_learned === "ham") return h("span", { class: "badge ok", title: "Als Ham angelernt" }, "Ham gelernt");
+  return null;
+}
+
+function renderMails() {
+  const spamOn = !!(S.spam && S.spam.enabled);
+  const learnOn = spamOn && S.spam.learn && S.spam.learn.enabled;
+  $("#mailRows").replaceChildren(...M.rows.map(m => {
+    const k = mkey(m);
+    const selected = M.sel.has(k);
+    const actions = h("div", { class: "act" },
+      spamOn ? h("button", { class: "del", title: "Als Spam anlernen und in den Papierkorb", onclick: () => doMailAction([m], "spam") }, "Spam") : null,
+      learnOn && m.spam_learned !== "ham" ? h("button", { title: "Als Ham anlernen, Mail bleibt liegen", onclick: () => doMailAction([m], "ham") }, "Kein Spam") : null,
+      h("button", { class: "del", onclick: () => doMailAction([m], "trash") }, "Löschen"),
+    );
+    return h("tr", { class: (selected ? "sel " : "") + (m.kept ? "dim" : "") },
+      h("td", { class: "c-sel" }, h("input", {
+        type: "checkbox", checked: selected, "aria-label": "Auswählen",
+        onchange: e => { e.target.checked ? M.sel.add(k) : M.sel.delete(k); e.target.closest("tr").classList.toggle("sel", e.target.checked); renderMailBulk(); },
+      })),
+      h("td", {}, h("div", { class: "who static" },
+        h("span", { class: "n", title: m.subject }, m.subject || "(kein Betreff)"),
+        h("span", { class: "a", title: m.from_addr }, m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr),
+        h("span", {}, learnedBadge(m), m.kept ? h("span", { class: "badge acc", title: "Absender ist ausgeblendet (behalten)" }, "ausgeblendet") : null),
+      )),
+      h("td", { class: "hide-s nowrap", title: dtfl.format(new Date(m.date * 1000)) }, fmtRel(m.date)),
+      h("td", { class: "hide-m" }, m.folder),
+      h("td", { class: "num hide-m" }, fmtBytes(m.size)),
+      h("td", { class: "spam-only" }, mailScore(m)),
+      h("td", { class: "c-act" }, actions),
+    );
+  }));
+  const empty = $("#mEmpty");
+  if (!M.rows.length) {
+    empty.textContent = S.status && S.status.messages ? "Keine Mails für diese Filter." : "Noch keine Daten. Erst synchronisieren.";
+    empty.classList.remove("hidden");
+  } else empty.classList.add("hidden");
+  $("#mPagerInfo").textContent = `${nf.format(M.rows.length)} von ${nf.format(M.total)} Mails`;
+  $("#mMoreBtn").classList.toggle("hidden", M.rows.length >= M.total);
+  $("#mSelAll").checked = M.rows.length > 0 && M.rows.every(m => M.sel.has(mkey(m)));
+  renderMailBulk();
+}
+
+function renderMailBulk() {
+  const n = M.sel.size;
+  $("#mbulk").classList.toggle("hidden", n === 0);
+  $("#mbulkCount").textContent = `${nf.format(n)} Mail${n === 1 ? "" : "s"} ausgewählt`;
+}
+
+async function doMailAction(mails, action) {
+  if (!mails.length) return;
+  const n = mails.length;
+  const what = n === 1 ? `„${mails[0].subject || "(kein Betreff)"}“` : `${nf.format(n)} Mails`;
+  const ln = (S.spam && S.spam.learn) || {};
+  if (action !== "ham") {
+    const title = { spam: "Spam melden", trash: "In Papierkorb", archive: "Archivieren" }[action];
+    const target = action === "archive" ? (S.special.archive || "Archiv") : (S.special.trash || "Papierkorb");
+    const body = [
+      `${what} ${action === "archive" ? "archivieren" : action === "spam" ? "als Spam melden und in den Papierkorb verschieben" : "in den Papierkorb verschieben"}?`,
+      h("p", { class: "muted" }, `Ziel: „${target}“. ` + (action === "archive" ? "Die Mails bleiben im Archiv vollständig erhalten."
+        : "iCloud leert den Papierkorb nach 30 Tagen, bis dahin lässt sich alles zurückholen.")),
+    ];
+    if (action === "spam") body.push(h("p", { class: "muted" }, !ln.enabled ? "Anlernen ist nicht eingerichtet, die Mails landen nur im Papierkorb."
+      : S.dry ? "Testmodus: Es wird nichts angelernt und nichts verschoben." : "Rspamd lernt die Mails vorher als Spam an, auch wenn sie bisher als Ham gelernt waren."));
+    const v = await dialog(title, body, [["Abbrechen", "", "ghost"], [title, "ok", action === "archive" ? "" : "danger"]]);
+    if (v !== "ok") return;
+  }
+  try {
+    const r = await api("/api/messages/action", { method: "POST", body: { action, items: mails.map(m => ({ folder: m.folder, uid: m.uid })) } });
+    if (action === "ham") {
+      toast(r.learn_error ? `Anlernen fehlgeschlagen: ${r.learn_error}` : `${nf.format(r.learned)} Mail${r.learned === 1 ? "" : "s"} als Kein Spam angelernt`, !!r.learn_error);
+    } else {
+      toast(`${r.dry_run ? "[DRY-RUN] " : ""}${nf.format(r.moved)} Mails nach „${r.target}“ verschoben`
+        + (r.learned ? `, ${nf.format(r.learned)} als Spam angelernt` : "") + (r.learn_error ? ` (Anlernen: ${r.learn_error})` : ""), !!r.learn_error);
+    }
+    mails.forEach(m => M.sel.delete(mkey(m)));
+    await loadMails(true, true);
+    loadStatus();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------------------------------------------------------------------
 // Detail-Drawer
 // ---------------------------------------------------------------------------
 async function openDrawer(row) {
@@ -710,6 +843,7 @@ function initControls() {
     if (t.dataset.tab === "done") loadDone();
     if (t.dataset.tab === "settings") loadSettings();
     if (t.dataset.tab === "senders") loadSenders(true, true);
+    if (t.dataset.tab === "mails") loadMails(true, true);
   }));
 
   let qTimer;
@@ -739,6 +873,26 @@ function initControls() {
     else doAction([...S.sel], a);
   }));
   $("#moreBtn").addEventListener("click", () => loadSenders(false));
+
+  // Tab Mails (#16)
+  let mqTimer;
+  $("#mq").addEventListener("input", e => { clearTimeout(mqTimer); mqTimer = setTimeout(() => { M.q = e.target.value.trim(); loadMails(); }, 250); });
+  $("#msort").value = M.sort;
+  $("#msort").addEventListener("change", e => { M.sort = e.target.value; saveMailView(); loadMails(); });
+  $("#mfolder").addEventListener("change", e => { M.folder = e.target.value; loadMails(); });
+  for (const [id, k] of [["mOnlySpam", "onlySpam"], ["mShowKept", "showKept"]]) {
+    $("#" + id).checked = M[k];
+    $("#" + id).addEventListener("change", e => { M[k] = e.target.checked; saveMailView(); loadMails(); });
+  }
+  $("#mSelAll").addEventListener("change", e => {
+    M.rows.forEach(m => e.target.checked ? M.sel.add(mkey(m)) : M.sel.delete(mkey(m)));
+    renderMails();
+  });
+  $("#mbulkClear").addEventListener("click", () => { M.sel.clear(); renderMails(); });
+  $$("[data-mbulk]").forEach(b => b.addEventListener("click", () => {
+    doMailAction(M.rows.filter(m => M.sel.has(mkey(m))), b.dataset.mbulk);
+  }));
+  $("#mMoreBtn").addEventListener("click", () => loadMails(false));
   $("#spamTrashBtn").addEventListener("click", doSpamTrash);
   $("#dryrun").addEventListener("click", () => showTab("settings"));
   $("#dryToggle").addEventListener("click", async () => {
