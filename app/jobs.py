@@ -48,6 +48,7 @@ class SyncStatus:
         self.special: dict[str, str] = {}
         self.folders: list[dict] = []
         self.spam_error = ""
+        self.learn_error = ""
 
     def as_dict(self):
         return {k: v for k, v in self.__dict__.items()}
@@ -126,6 +127,82 @@ def _score_spam(conn: Imap) -> None:
         if str(e) != status.spam_error:
             db.add_log("spam", settings.rspamd_url, str(e), ok=False)
         status.spam_error = str(e)
+        return
+    _learn_ham(conn)
+    _auto_spam_trash(conn)
+
+
+def _learn_error(e: Exception | None) -> None:
+    """Merkt sich einen Anlern-Fehler für die UI, protokolliert ihn aber nur einmal."""
+    msg = str(e) if e else ""
+    if msg and msg != status.learn_error:
+        log.warning("%s", msg)
+        db.add_log("spam-learn", settings.rspamd_controller_url, msg, ok=False)
+    status.learn_error = msg
+
+
+def _learn_ham(conn: Imap) -> None:
+    """Lernt Mails ausgeblendeter Absender als Ham an (#12), höchstens SPAM_LEARN_MAX pro Sync."""
+    if not spam.learning_enabled():
+        return
+    with db.connect() as con:
+        rows = spam.ham_pending(con, settings.spam_learn_max)
+    if not rows:
+        return
+    status.phase = "Spam anlernen"
+    try:
+        c = spam.learn_messages(conn, rows, "ham")
+        _learn_error(None)
+        if c["ok"]:
+            db.add_log("spam-learn", "ham", f"{c['ok']} Mails ausgeblendeter Absender als Ham angelernt")
+    except spam.SpamError as e:
+        _learn_error(e)
+
+
+def _learn_spam(conn: Imap, by_folder: dict[str, list[int]], label: str) -> dict | None:
+    """Lernt vor dem Verschieben die neuesten Mails als Spam an. Fehler stoppen das Verschieben nicht.
+    Im Testmodus wird nicht angelernt, weil die Mails ja auch nicht gelöscht werden."""
+    if not spam.learning_enabled() or settings.dry_run:
+        return None
+    with db.connect() as con:
+        rows = spam.newest(con, by_folder, settings.spam_learn_max)
+    try:
+        c = spam.learn_messages(conn, rows, "spam")
+        _learn_error(None)
+        db.add_log("spam-learn", label, f"{c['ok']} Mails als Spam angelernt"
+                   + (f", {c['known']} kannte Rspamd schon" if c["known"] else ""))
+        return c
+    except spam.SpamError as e:
+        _learn_error(e)
+        return None
+
+
+def _learn_result(learned: dict | None, attempted: bool) -> dict:
+    """Antwortfelder zum Anlernen für die UI. Ein Fehler zählt nur, wenn diesmal angelernt werden sollte."""
+    tried = attempted and spam.learning_enabled() and not settings.dry_run
+    return {"learned": learned["ok"] + learned["known"] if learned else 0,
+            "learn_error": status.learn_error if tried else ""}
+
+
+def _auto_spam_trash(conn: Imap) -> None:
+    """Score-Regel (#12): Mails ab SPAM_AUTO_SCORE in den Papierkorb, ohne ausgeblendete Absender."""
+    if not settings.spam_auto_trash:
+        return
+    label = f"Spam-Score ≥ {settings.spam_auto_score}"
+    try:
+        _ensure_special(conn)
+        target = resolve_target("trash")
+        with db.connect() as con:
+            by_folder, summary = spam_locations(con, float(settings.spam_auto_score), target)
+        if not summary["count"]:
+            return
+        status.phase = "Spam-Regel"
+        moved = move_messages(conn, by_folder, target, "trash", "rule")
+    except Exception as e:
+        db.add_log("spam-rule", label, str(e), ok=False)
+        return
+    prefix = "[DRY-RUN] " if settings.dry_run else ""
+    db.add_log("spam-rule", label, f"{prefix}{moved} Mails von {summary['senders']} Absendern nach {target!r}")
 
 
 def _sync_folder(conn: Imap, folder: str) -> None:
@@ -289,19 +366,25 @@ def sender_action(group: str, keys: list[str], action: str, target_folder: str =
         db.add_log(action, ", ".join(keys)[:500], f"{len(keys)} Absender")
         return {"moved": 0}
 
+    # "spam" = Spam melden (#12): erst als Spam anlernen, dann in den Papierkorb
+    move_action = "trash" if action == "spam" else action
+    learned = None
     with imap_job() as conn:
         _ensure_special(conn)
-        target = resolve_target(action, target_folder)
+        target = resolve_target(move_action, target_folder)
         with db.connect() as con:
             by_folder = _locations(con, group, keys)
+        if action == "spam":
+            learned = _learn_spam(conn, by_folder, ", ".join(keys)[:500])
         try:
-            moved = move_messages(conn, by_folder, target, action, "manual")
+            moved = move_messages(conn, by_folder, target, move_action, "manual")
         except Exception as e:
             db.add_log(action, ", ".join(keys)[:500], str(e), ok=False)
             raise
     prefix = "[DRY-RUN] " if settings.dry_run else ""
     db.add_log(action, ", ".join(keys)[:500], f"{prefix}{moved} Mails nach {target!r}")
-    return {"moved": moved, "target": target, "dry_run": settings.dry_run}
+    return {"moved": moved, "target": target, "dry_run": settings.dry_run,
+            **_learn_result(learned, action == "spam")}
 
 
 # --------------------------------------------------------------------------
@@ -343,6 +426,7 @@ def spam_trash(min_score: float) -> dict:
         with db.connect() as con:
             by_folder, summary = spam_locations(con, min_score, target)
         label = f"Spam-Score ≥ {min_score:g}"
+        learned = _learn_spam(conn, by_folder, label)
         try:
             moved = move_messages(conn, by_folder, target, "trash", "manual")
         except Exception as e:
@@ -350,7 +434,8 @@ def spam_trash(min_score: float) -> dict:
             raise
     prefix = "[DRY-RUN] " if settings.dry_run else ""
     db.add_log("spam-trash", label, f"{prefix}{moved} Mails von {summary['senders']} Absendern nach {target!r}")
-    return {"moved": moved, "target": target, "dry_run": settings.dry_run, **summary}
+    return {"moved": moved, "target": target, "dry_run": settings.dry_run, **summary,
+            **_learn_result(learned, True)}
 
 
 # --------------------------------------------------------------------------
