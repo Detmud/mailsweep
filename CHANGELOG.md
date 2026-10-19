@@ -2,6 +2,14 @@
 
 Versionsschema: MAJOR.MINOR.PATCH. Die laufende Version steht oben in der Weboberfläche und im Container-Log.
 
+## 1.7.0 (2026-10-19)
+- Neu (#16): Tab „Mails“ mit einer Zeile pro Mail: Betreff, Absender, Datum, Ordner, Größe, Spam-Score (Regeln im Tooltip) und Anlern-Stand. Suche nach Betreff und Absender, Filter nach Ordner und „nur Spam-Verdacht“, Sortierung nach Datum, Score oder Größe.
+- Aktionen für einzelne Mails und eine Auswahl: „Spam melden“ (anlernen und Papierkorb), „Kein Spam“ (als Ham anlernen, Mail bleibt liegen), „In Papierkorb“, „Archivieren“. Damit lassen sich Spam von wechselnden Adressen und einzelne Mails eines sonst erwünschten Absenders erfassen.
+- Umlernen: Eine als Ham gelernte Mail lässt sich als Spam melden und umgekehrt. Rspamd trägt sie aus der alten Klasse aus, die Zähler passen sich an.
+- Testmodus wie bei Absendern: Spam wird weder angelernt noch verschoben, „Kein Spam“ lernt an.
+- Tab-Leiste scrollt auf schmalen Bildschirmen.
+- Neuer Test `tests/test_mails.py`, mit Fake-Rspamd oder echtem Rspamd plus Redis.
+
 ## 1.6.0 (2026-10-19)
 - Neu (#12): Spam anlernen mit Bayes. „Spam melden“ (Detailbereich und Mehrfachauswahl) lernt die Mails eines Absenders als Spam an und schiebt sie in den Papierkorb. „Spam-Verdacht löschen“ lernt ebenfalls an. Mails ausgeblendeter Absender lernt der nächste Sync als Ham an. Höchstens 100 Mails pro Aktion bzw. Sync (`SPAM_LEARN_MAX`), jede Mail nur einmal.
 - Bayes wirkt erst ab 200 angelernten Mails je Klasse. Der Stand steht neben „Spam-Verdacht löschen“.

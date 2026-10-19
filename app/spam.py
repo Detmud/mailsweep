@@ -146,9 +146,21 @@ def learn_messages(conn: Imap, rows: list[tuple[str, int]], kind: str) -> dict:
     counts = {"ok": 0, "known": 0, "skip": 0, "missing": 0}
     if not rows:
         return counts
+    other = "ham" if kind == "spam" else "spam"
     by_folder: dict[str, list[int]] = defaultdict(list)
     for folder, uid in rows:
         by_folder[folder].append(uid)
+    # Bisheriger Stand: Wird eine Mail umgelernt (Ham -> Spam oder umgekehrt, #16), zählt die alte
+    # Klasse eins runter. Rspamd selbst lernt die Mail dabei aus der alten Klasse aus.
+    prev: dict[tuple[str, int], str] = {}
+    with db.connect() as con:
+        for folder, uids in by_folder.items():
+            for chunk in chunked(sorted(uids), 900):
+                for r in con.execute(
+                    f"SELECT uid, spam_learned FROM messages WHERE folder=? AND uid IN ({','.join('?' * len(chunk))})",
+                    (folder, *chunk),
+                ):
+                    prev[(folder, r["uid"])] = r["spam_learned"]
     max_bytes = max(16, settings.spam_max_kb) * 1024
     with _client() as client:
         for folder, uids in by_folder.items():
@@ -166,19 +178,24 @@ def learn_messages(conn: Imap, rows: list[tuple[str, int]], kind: str) -> dict:
                 with db.connect() as con:
                     con.executemany("UPDATE messages SET spam_learned=? WHERE folder=? AND uid=?", marks)
                     db.add_counter(con, f"learned_{kind}", sum(1 for m in marks if m[0] == kind))
+                    db.add_counter(con, f"learned_{other}", -sum(
+                        1 for m in marks if m[0] == kind and prev.get((m[1], m[2])) == other))
     log.info("Anlernen als %s: %s", kind, counts)
     return counts
 
 
-def newest(con, by_folder: dict[str, list[int]], limit: int) -> list[tuple[str, int]]:
-    """Die neuesten `limit` Mails aus by_folder, die noch nicht angelernt sind."""
+def newest(con, by_folder: dict[str, list[int]], limit: int, relearn: str = "") -> list[tuple[str, int]]:
+    """Die neuesten `limit` Mails aus by_folder, die noch nicht angelernt sind. Mit relearn='spam'
+    bzw. 'ham' auch die, die bisher in der anderen Klasse stehen (Einzelaktion, #16)."""
+    cond = "spam_learned NOT IN (?, 'skip')" if relearn else "spam_learned=''"
+    extra = (relearn,) if relearn else ()
     rows = []
     for folder, uids in by_folder.items():
         for chunk in chunked(sorted(uids), 900):
             rows += con.execute(
-                f"SELECT folder, uid, date FROM messages WHERE folder=? AND spam_learned='' "
+                f"SELECT folder, uid, date FROM messages WHERE folder=? AND {cond} "
                 f"AND uid IN ({','.join('?' * len(chunk))})",
-                (folder, *chunk),
+                (folder, *extra, *chunk),
             ).fetchall()
     rows.sort(key=lambda r: -r["date"])
     return [(r["folder"], r["uid"]) for r in rows[:limit]]

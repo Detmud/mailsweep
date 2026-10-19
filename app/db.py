@@ -204,12 +204,12 @@ def add_log(action: str, target: str, detail: str = "", ok: bool = True) -> None
 
 
 def add_counter(con, key: str, n: int) -> None:
-    """Zählt einen Wert in meta hoch (z. B. angelernte Mails, #12)."""
+    """Zählt einen Wert in meta hoch oder runter (z. B. angelernte Mails, #12), nie unter 0."""
     if n:
         con.execute(
             "INSERT INTO meta(key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + ?",
-            (key, str(n), n),
+            "ON CONFLICT(key) DO UPDATE SET value = MAX(0, CAST(value AS INTEGER) + ?)",
+            (key, str(max(0, n)), n),
         )
 
 
