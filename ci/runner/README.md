@@ -6,7 +6,7 @@
 
 1. `apt-get install` von git, Python 3.12, Dovecot, Rspamd 3.8 und Redis (Ubuntu-Pakete, wie in den Images).
 2. Checkout per `git fetch` mit dem Job-Token. Keine fremden Actions, also kein Download von `actions/checkout` aus dem Internet.
-3. `tests/ci.sh`: `ruff`, `test_parse.py`, `test_net.py`, eigener Dovecot auf 127.0.0.1:10143 mit frischem Postfach, `seed.py`, `test_e2e.py`, `test_spam.py` und `test_learn.py` mit Fake-Rspamd und noch einmal gegen einen echten Rspamd mit `rspamd/` und Redis per Unix-Socket.
+3. `tests/ci.sh`: `ruff`, `test_parse.py`, `test_net.py`, eigener Dovecot auf 127.0.0.1:10143 mit frischem Postfach, `seed.py`, `test_e2e.py`, `test_spam.py`, `test_learn.py` und `test_mails.py` mit Fake-Rspamd und noch einmal gegen einen echten Rspamd mit `rspamd/` und Redis per Unix-Socket.
 
 Der Job braucht Internet für die Ubuntu-Paketquellen und PyPI. Er braucht **keine** Zugangsdaten zu iCloud und sieht keine echten Mails. Laufzeit etwa 2 bis 4 Minuten, der Großteil ist `apt-get`.
 

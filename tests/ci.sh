@@ -4,7 +4,7 @@
 # Braucht: root, python3 (>= 3.12) mit venv, dovecot-imapd, openssl, optional rspamd und redis-server.
 # Startet einen eigenen Dovecot auf 127.0.0.1:10143 mit frischem Postfach in einem
 # Temp-Verzeichnis. Die Ports 10143, 11333 und 11334 müssen dafür frei sein.
-# Mit rspamd und redis-server im PATH laufen test_spam.py und test_learn.py zusätzlich gegen
+# Mit rspamd und redis-server im PATH laufen test_spam.py, test_learn.py und test_mails.py zusätzlich gegen
 # einen echten Rspamd mit der Konfiguration aus rspamd/ und Redis per Unix-Socket, ohne
 # /etc/rspamd anzufassen.
 #
@@ -100,6 +100,9 @@ step "test_spam.py (Fake-Rspamd)"
 step "test_learn.py (Fake-Rspamd)"
 "$PY" tests/test_learn.py
 
+step "test_mails.py (Fake-Rspamd)"
+"$PY" tests/test_mails.py
+
 # ---------------------------------------------------------------- echter Rspamd + Redis
 if [ -z "${CI_SKIP_RSPAMD:-}" ] && command -v rspamd >/dev/null && command -v redis-server >/dev/null; then
   step "Redis und Rspamd mit rspamd/ starten"
@@ -129,6 +132,9 @@ if [ -z "${CI_SKIP_RSPAMD:-}" ] && command -v rspamd >/dev/null && command -v re
   step "test_learn.py (echter Rspamd mit Redis)"
   RSPAMD_URL=http://127.0.0.1:11333 RSPAMD_CONTROLLER_URL=http://127.0.0.1:11334 \
     RSPAMD_PASSWORD="$RSPAMD_CONTROLLER_PASSWORD" "$PY" tests/test_learn.py
+  step "test_mails.py (echter Rspamd mit Redis)"
+  RSPAMD_URL=http://127.0.0.1:11333 RSPAMD_CONTROLLER_URL=http://127.0.0.1:11334 \
+    RSPAMD_PASSWORD="$RSPAMD_CONTROLLER_PASSWORD" "$PY" tests/test_mails.py
 else
   echo "Rspamd oder Redis nicht installiert oder ausgelassen, nur Fake-Rspamd getestet."
 fi
