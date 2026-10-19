@@ -118,6 +118,7 @@ async function loadStatus() {
     S.status = st;
     $("#account").textContent = `${st.account} · ${st.host}`;
     $("#dryrun").classList.toggle("hidden", !st.dry_run);
+    S.dry = !!st.dry_run;
     $("#version").textContent = "v" + st.version;
     $("#stMessages").textContent = nf.format(st.messages);
     $("#stBytes").textContent = fmtBytes(st.bytes);
@@ -247,10 +248,24 @@ function renderSpamInfo(sp) {
   S.spam = sp;
   document.body.classList.toggle("spam-on", !!sp.enabled);
   const hint = $("#spamHint");
+  const ln = sp.learn || {};
   if (sp.enabled && sp.error) {
     hint.textContent = `Spamfilter: ${sp.error}. Läuft der Rspamd-Container (COMPOSE_PROFILES=spam)?`;
     hint.classList.remove("hidden");
+  } else if (sp.enabled && ln.enabled && ln.error) {
+    hint.textContent = `Anlernen: ${ln.error}`;
+    hint.classList.remove("hidden");
   } else hint.classList.add("hidden");
+  const info = $("#spamLearn");
+  const parts = [];
+  if (ln.enabled) {
+    const ready = ln.spam >= ln.min_learns && ln.ham >= ln.min_learns;
+    parts.push(`Bayes: ${nf.format(ln.spam)} Spam / ${nf.format(ln.ham)} Ham angelernt` + (ready ? "" : `, wirkt ab je ${ln.min_learns}`));
+  }
+  if (sp.auto && sp.auto.enabled) parts.push(`Auto-Löschen ab Score ${sp.auto.score}`);
+  info.textContent = parts.join(" · ");
+  info.title = ln.enabled ? "„Spam melden“ und „Spam-Verdacht löschen“ lernen Spam an, ausgeblendete Absender werden beim Sync als Ham angelernt."
+    : (ln.configured ? "Anlernen ist in den Einstellungen aus." : "Zum Anlernen RSPAMD_PASSWORD in der Env-Datei setzen (bei Komodo als Secret) und neu deployen.");
   const b = $("#spamTrashBtn");
   b.textContent = `Spam-Verdacht löschen (${nf.format(sp.suspect || 0)})`;
   b.disabled = !sp.suspect;
@@ -267,7 +282,8 @@ async function doSpamTrash() {
     ], [["Abbrechen", "", "ghost"], ["In Papierkorb", "ok", "danger"]]);
     if (v !== "ok") return;
     const r = await api("/api/spam/trash", { method: "POST", body: { min_score: p.min_score } });
-    toast(`${r.dry_run ? "[DRY-RUN] " : ""}${nf.format(r.moved)} Mails nach „${r.target}“ verschoben`);
+    toast(`${r.dry_run ? "[DRY-RUN] " : ""}${nf.format(r.moved)} Mails nach „${r.target}“ verschoben`
+      + (r.learned ? `, ${nf.format(r.learned)} als Spam angelernt` : "") + (r.learn_error ? ` (Anlernen: ${r.learn_error})` : ""), !!r.learn_error);
     await loadSenders(true, true);
     loadStatus();
   } catch (e) { toast(e.message, true); }
@@ -333,20 +349,28 @@ function countFor(keys) {
 }
 
 async function doAction(keys, action, opts = {}) {
-  const labels = { archive: "archivieren", trash: "in den Papierkorb verschieben" };
-  if (action === "archive" || action === "trash") {
+  const labels = { archive: "archivieren", trash: "in den Papierkorb verschieben", spam: "als Spam melden und in den Papierkorb verschieben" };
+  if (action === "archive" || action === "trash" || action === "spam") {
     const n = opts.count ?? countFor(keys);
     const target = action === "archive" ? (S.special.archive || "Archiv") : (S.special.trash || "Papierkorb");
     if (!opts.skipConfirm) {
       const who = keys.length === 1 ? keys[0] : `${keys.length} ${S.group === "addr" ? "Absender" : "Domains"}`;
       const body = [
         `${nf.format(n)} Mails von ${who} ${labels[action]}?`,
-        h("p", { class: "muted" }, `Ziel: „${target}“. ` + (action === "trash"
+        h("p", { class: "muted" }, `Ziel: „${target}“. ` + (action !== "archive"
           ? "iCloud leert den Papierkorb nach 30 Tagen, bis dahin lässt sich alles zurückholen."
           : "Die Mails bleiben im Archiv vollständig erhalten.")),
       ];
-      const v = await dialog(action === "archive" ? "Archivieren" : "In Papierkorb", body,
-        [["Abbrechen", "", "ghost"], [action === "archive" ? "Archivieren" : "In Papierkorb", "ok", action === "trash" ? "danger" : ""]]);
+      if (action === "spam") {
+        const ln = (S.spam && S.spam.learn) || {};
+        body.push(h("p", { class: "muted" }, ln.enabled
+          ? (S.dry ? "Testmodus: Es wird nichts angelernt und nichts verschoben."
+                   : "Die neuesten Mails lernt Rspamd vorher als Spam an. Nur für echten Spam, nicht für Newsletter, die dich bloß nerven.")
+          : "Anlernen ist nicht eingerichtet, die Mails landen nur im Papierkorb."));
+      }
+      const title = { archive: "Archivieren", trash: "In Papierkorb", spam: "Spam melden" }[action];
+      const v = await dialog(title, body,
+        [["Abbrechen", "", "ghost"], [title, "ok", action === "archive" ? "" : "danger"]]);
       if (v !== "ok") return false;
     }
   }
@@ -354,7 +378,8 @@ async function doAction(keys, action, opts = {}) {
     const r = await api("/api/action", { method: "POST", body: { group: S.group, keys, action } });
     if (action === "keep") toast(`${keys.length} ausgeblendet`);
     else if (action === "unkeep") toast(`${keys.length} wieder eingeblendet`);
-    else toast(`${r.dry_run ? "[DRY-RUN] " : ""}${nf.format(r.moved)} Mails nach „${r.target}“ verschoben`);
+    else toast(`${r.dry_run ? "[DRY-RUN] " : ""}${nf.format(r.moved)} Mails nach „${r.target}“ verschoben`
+      + (r.learned ? `, ${nf.format(r.learned)} als Spam angelernt` : "") + (r.learn_error ? ` (Anlernen: ${r.learn_error})` : ""), !!r.learn_error);
     keys.forEach(k => S.sel.delete(k));
     await loadSenders(true, true);
     loadStatus();
@@ -475,6 +500,7 @@ async function openDrawer(row) {
     isAddr && row.has_unsub ? h("button", { class: "btn sm", onclick: () => { closeDrawer(); doUnsubscribe(key); } }, "Abmelden") : null,
     h("button", { class: "btn sm ghost", onclick: async () => { if (await doAction([key], "archive")) closeDrawer(); } }, "Archivieren"),
     h("button", { class: "btn sm ghost", onclick: async () => { if (await doAction([key], "trash")) closeDrawer(); } }, "In Papierkorb"),
+    S.spam && S.spam.enabled ? h("button", { class: "btn sm ghost", title: "Als Spam anlernen und in den Papierkorb", onclick: async () => { if (await doAction([key], "spam")) closeDrawer(); } }, "Spam melden") : null,
     h("button", { class: "btn sm ghost", onclick: () => ruleFromDrawer(key, "archive") }, "Regel: archivieren"),
     h("button", { class: "btn sm ghost", onclick: () => ruleFromDrawer(key, "trash") }, "Regel: löschen"),
   ].filter(Boolean));  // replaceChildren(null) würde den Text „null“ einfügen
