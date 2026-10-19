@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager
 
-from . import db
+from . import db, spam
 from .config import settings
 from .imap import Imap, ImapError, chunked
 
@@ -47,6 +47,7 @@ class SyncStatus:
         self.error = ""
         self.special: dict[str, str] = {}
         self.folders: list[dict] = []
+        self.spam_error = ""
 
     def as_dict(self):
         return {k: v for k, v in self.__dict__.items()}
@@ -92,6 +93,7 @@ def run_sync() -> None:
                 log.info("%d Einträge aus nicht mehr analysierten Ordnern entfernt", removed)
             status.phase = "Regeln anwenden"
             _apply_rules(conn)
+            _score_spam(conn)
         status.phase = "fertig"
     except Busy:
         status.phase = "übersprungen (beschäftigt)"
@@ -103,6 +105,27 @@ def run_sync() -> None:
     finally:
         status.running = False
         status.finished = int(time.time())
+
+
+def _score_spam(conn: Imap) -> None:
+    """Spam-Bewertung nach dem Sync. Ein Fehler (Rspamd aus, falsche URL) bricht den Sync nicht ab."""
+    if not settings.spam_filter:
+        status.spam_error = ""
+        return
+    status.phase = "Spam bewerten"
+    status.folder = ""
+
+    def progress(done, total):
+        status.done, status.total = done, total
+
+    try:
+        spam.score_pending(conn, progress)
+        status.spam_error = ""
+    except spam.SpamError as e:
+        log.warning("%s", e)
+        if str(e) != status.spam_error:
+            db.add_log("spam", settings.rspamd_url, str(e), ok=False)
+        status.spam_error = str(e)
 
 
 def _sync_folder(conn: Imap, folder: str) -> None:
@@ -279,6 +302,55 @@ def sender_action(group: str, keys: list[str], action: str, target_folder: str =
     prefix = "[DRY-RUN] " if settings.dry_run else ""
     db.add_log(action, ", ".join(keys)[:500], f"{prefix}{moved} Mails nach {target!r}")
     return {"moved": moved, "target": target, "dry_run": settings.dry_run}
+
+
+# --------------------------------------------------------------------------
+# Spam-Verdacht in den Papierkorb (#3)
+# --------------------------------------------------------------------------
+
+def spam_locations(con, min_score: float, exclude_folder: str = "") -> tuple[dict[str, list[int]], dict]:
+    """Mails ab min_score in den analysierten Ordnern. Ausgeblendete Absender und Domains
+    („behalten“) sind ausgenommen."""
+    folders = [f for f in settings.folders if f != exclude_folder] or [""]
+    by_folder: dict[str, list[int]] = defaultdict(list)
+    count = size = 0
+    senders = set()
+    for r in con.execute(
+        f"SELECT folder, uid, size, from_addr FROM messages m WHERE spam_score >= ? "
+        f"AND folder IN ({','.join('?' * len(folders))}) "
+        "AND NOT EXISTS (SELECT 1 FROM sender_state s WHERE s.kept=1 AND "
+        "((s.grp='addr' AND s.key=m.from_addr) OR (s.grp='domain' AND s.key=m.org_domain)))",
+        (min_score, *folders),
+    ):
+        by_folder[r["folder"]].append(r["uid"])
+        count += 1
+        size += r["size"] or 0
+        senders.add(r["from_addr"])
+    return by_folder, {"count": count, "bytes": size, "senders": len(senders)}
+
+
+def spam_preview(min_score: float) -> dict:
+    target = status.special.get("trash") or settings.trash_folder
+    with db.connect() as con:
+        _, summary = spam_locations(con, min_score, target)
+    return {**summary, "min_score": min_score, "target": target}
+
+
+def spam_trash(min_score: float) -> dict:
+    with imap_job() as conn:
+        _ensure_special(conn)
+        target = resolve_target("trash")
+        with db.connect() as con:
+            by_folder, summary = spam_locations(con, min_score, target)
+        label = f"Spam-Score ≥ {min_score:g}"
+        try:
+            moved = move_messages(conn, by_folder, target, "trash", "manual")
+        except Exception as e:
+            db.add_log("spam-trash", label, str(e), ok=False)
+            raise
+    prefix = "[DRY-RUN] " if settings.dry_run else ""
+    db.add_log("spam-trash", label, f"{prefix}{moved} Mails von {summary['senders']} Absendern nach {target!r}")
+    return {"moved": moved, "target": target, "dry_run": settings.dry_run, **summary}
 
 
 # --------------------------------------------------------------------------

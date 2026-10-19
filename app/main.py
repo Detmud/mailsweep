@@ -17,7 +17,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import db, jobs, unsubscribe
+from . import db, jobs, spam, unsubscribe
 from . import imap as imap_mod
 from .config import EDITABLE, ENV_DEFAULTS, coerce, settings
 from .imap import ImapError
@@ -134,6 +134,15 @@ def api_status():
         folders = [dict(r) for r in con.execute(
             "SELECT f.name, f.last_sync, (SELECT COUNT(*) FROM messages m WHERE m.folder=f.name) AS count FROM folders f"
         )]
+        spam_info = {"enabled": settings.spam_filter, "threshold": settings.spam_threshold,
+                     "max_age_days": settings.spam_max_age_days, "error": jobs.status.spam_error}
+        if settings.spam_filter:
+            cond, params = spam.pending_condition()
+            row = con.execute(
+                "SELECT COUNT(spam_score), COALESCE(SUM(spam_score >= ?),0) FROM messages", (settings.spam_threshold,)
+            ).fetchone()
+            spam_info.update(scored=row[0], suspect=row[1],
+                             pending=con.execute(f"SELECT COUNT(*) FROM messages WHERE {cond}", params).fetchone()[0])
     return {
         "version": __version__,
         "account": settings.imap_user,
@@ -148,6 +157,7 @@ def api_status():
         "senders_with_unsub": with_unsub,
         "folders": folders,
         "sync": jobs.status.as_dict(),
+        "spam": spam_info,
         "now": int(time.time()),
     }
 
@@ -165,6 +175,7 @@ SORTS = {
     "size": "bytes DESC, cnt DESC",
     "recent": "last DESC",
     "name": "key ASC",
+    "spam": "spam_max DESC, spam_hits DESC, cnt DESC",
 }
 
 
@@ -173,10 +184,11 @@ def api_senders(
     group: Literal["addr", "domain"] = "addr",
     q: str = "",
     only_unsub: bool = False,
+    only_spam: bool = False,
     show_kept: bool = False,
     show_unsubscribed: bool = True,
     folder: str = "",
-    sort: Literal["count", "size", "recent", "name"] = "count",
+    sort: Literal["count", "size", "recent", "name", "spam"] = "count",
     limit: int = 100,
     offset: int = 0,
 ):
@@ -193,6 +205,8 @@ def api_senders(
     having = []
     if only_unsub:
         having.append("has_unsub = 1")
+    if only_spam:
+        having.append("spam_hits > 0")
     if not show_kept:
         having.append("COALESCE(s.kept,0) = 0")
     if not show_unsubscribed:
@@ -212,7 +226,10 @@ def api_senders(
                MAX(CASE WHEN list_unsub LIKE '%<http%' THEN 1 ELSE 0 END) AS link,
                SUM(CASE WHEN auth_dkim = 'pass' THEN 1 ELSE 0 END) AS dkim_pass,
                SUM(CASE WHEN auth_dkim = 'pass-unaligned' THEN 1 ELSE 0 END) AS dkim_foreign,
-               SUM(CASE WHEN auth_dkim <> '' THEN 1 ELSE 0 END) AS dkim_known
+               SUM(CASE WHEN auth_dkim <> '' THEN 1 ELSE 0 END) AS dkim_known,
+               MAX(spam_score) AS spam_max,
+               SUM(CASE WHEN spam_score >= ? THEN 1 ELSE 0 END) AS spam_hits,
+               COUNT(spam_score) AS spam_known
         FROM messages
         WHERE {' AND '.join(where)}
         GROUP BY {col}
@@ -226,7 +243,7 @@ def api_senders(
         {('WHERE ' + ' AND '.join(having)) if having else ''}
     """
     with db.connect() as con:
-        full_params = [group, *params, group]
+        full_params = [group, settings.spam_threshold, *params, group]
         total = con.execute(f"SELECT COUNT(*), COALESCE(SUM(cnt),0) FROM ({outer})", full_params).fetchone()
         rows = [dict(r) for r in con.execute(
             f"{outer} ORDER BY {SORTS[sort]} LIMIT ? OFFSET ?", [*full_params, limit, offset]
@@ -343,8 +360,8 @@ def api_sender(key: str, group: Literal["addr", "domain"] = "addr"):
     col = "org_domain" if group == "domain" else "from_addr"
     with db.connect() as con:
         msgs = [dict(r) for r in con.execute(
-            f"SELECT folder, uid, from_addr, subject, date, size, list_id, auth_dkim, auth_dkim_domain "
-            f"FROM messages WHERE {col}=? ORDER BY date DESC LIMIT 25",
+            f"SELECT folder, uid, from_addr, subject, date, size, list_id, auth_dkim, auth_dkim_domain, "
+            f"spam_score, spam_symbols FROM messages WHERE {col}=? ORDER BY date DESC LIMIT 25",
             (key,),
         )]
         unsub = con.execute(
@@ -404,6 +421,29 @@ async def api_sender_auth(key: str, group: Literal["addr", "domain"] = "addr"):
     return {"folder": row["folder"], "uid": row["uid"], "auth_dkim": row["auth_dkim"],
             "auth_dkim_domain": row["auth_dkim_domain"], "headers": lines, "dkim_signatures": sigs,
             "trusted_authserv": settings.trusted_authserv}
+
+
+class SpamTrashReq(BaseModel):
+    min_score: float | None = Field(default=None, ge=0, le=1000)
+    preview: bool = False
+
+
+@app.post("/api/spam/trash", dependencies=[Depends(auth)])
+async def api_spam_trash(req: SpamTrashReq):
+    """Verschiebt alle Mails ab einem Spam-Score in den Papierkorb (ohne ausgeblendete Absender)."""
+    if not settings.spam_filter:
+        raise HTTPException(400, "Spamfilter ist aus (Einstellungen → Spamfilter).")
+    min_score = req.min_score if req.min_score is not None else float(settings.spam_threshold)
+    if req.preview:
+        return jobs.spam_preview(min_score)
+    return await asyncio.to_thread(jobs.spam_trash, min_score)
+
+
+@app.get("/api/spam/check", dependencies=[Depends(auth)])
+async def api_spam_check():
+    """Prüft, ob Rspamd erreichbar ist."""
+    err = await asyncio.to_thread(spam.ping)
+    return {"ok": not err, "detail": err or "Rspamd antwortet", "url": settings.rspamd_url}
 
 
 class ActionReq(BaseModel):
@@ -558,6 +598,10 @@ async def api_settings_save(req: SettingsReq):
     if "dry_run" in changed and not settings.dry_run:
         db.clear_dry_traces()
         log.warning("DRY_RUN ausgeschaltet: Aktionen werden ab jetzt wirklich ausgeführt.")
+    if "spam_filter" in changed:
+        jobs.status.spam_error = ""
+        if settings.spam_filter and not jobs.status.running:
+            asyncio.get_running_loop().run_in_executor(None, jobs.run_sync)
     if {"archive_folder", "trash_folder"} & changed.keys():
         jobs.status.special = {}
     if "folders" in changed:

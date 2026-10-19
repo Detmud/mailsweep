@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS messages (
     list_id         TEXT    NOT NULL DEFAULT '',
     auth_dkim       TEXT    NOT NULL DEFAULT '',
     auth_dkim_domain TEXT   NOT NULL DEFAULT '',
+    spam_score      REAL,                   -- NULL = noch nicht bewertet
+    spam_symbols    TEXT    NOT NULL DEFAULT '',
     PRIMARY KEY (folder, uid)
 );
 CREATE INDEX IF NOT EXISTS idx_msg_from ON messages(from_addr);
@@ -93,7 +95,14 @@ CREATE TABLE IF NOT EXISTS log (
 """
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# Spalten, die nach Schema 3 dazugekommen sind. Sie werden per ALTER TABLE ergänzt,
+# der Header-Cache bleibt dabei erhalten.
+ADDED_COLUMNS = {
+    "spam_score": "REAL",
+    "spam_symbols": "TEXT NOT NULL DEFAULT ''",
+}
 
 
 def init_db() -> None:
@@ -102,11 +111,16 @@ def init_db() -> None:
         con.executescript(SCHEMA)
         row = con.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
         current = int(row[0]) if row else 1
-        if current < SCHEMA_VERSION:
+        if current < 3:
             # v2: ARC-Authentication-Results, v3: alle vertrauenswürdigen Authentication-Results (#1).
             # Der Header-Cache wird einmal verworfen und beim nächsten Sync neu aufgebaut.
             con.execute("DELETE FROM messages")
             con.execute("DELETE FROM folders")
+        cols = {r[1] for r in con.execute("PRAGMA table_info(messages)")}
+        for name, decl in ADDED_COLUMNS.items():
+            if name not in cols:
+                con.execute(f"ALTER TABLE messages ADD COLUMN {name} {decl}")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_msg_spam ON messages(spam_score)")
         con.execute(
             "INSERT INTO meta(key, value) VALUES ('schema', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (str(SCHEMA_VERSION),),

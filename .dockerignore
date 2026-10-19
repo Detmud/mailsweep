@@ -4,3 +4,4 @@ data/
 tests/
 **/__pycache__
 *.pyc
+rspamd/

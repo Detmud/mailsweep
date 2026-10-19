@@ -8,6 +8,7 @@ Lokales Abmelde- und Aufräum-Dashboard für dein iCloud-Postfach, à la Leave M
 - **Archivieren / Papierkorb** pro Absender, Domain oder als Sammelaktion. Nichts wird endgültig gelöscht: Papierkorb heißt iCloud-Ordner „Deleted Messages“ (30 Tage wiederherstellbar).
 - **Regeln** („künftig archivieren/löschen“) laufen nach jedem Sync über die analysierten Ordner und fangen Nachzügler ab.
 - Protokoll aller Aktionen, `DRY_RUN`-Modus zum gefahrlosen Ausprobieren
+- optional: **Spamfilter** mit lokalem Rspamd ohne Internetzugang (ab 1.5.0, standardmäßig aus)
 
 Netzwerkverkehr nach außen: IMAP/SMTP zu Apple, DNS-Abfragen für DKIM-Schlüssel und die Abmelde-Requests selbst. Sonst nichts, keine CDNs, keine Telemetrie.
 
@@ -113,6 +114,22 @@ Klappt das Abmelden nicht, zeigt der Dialog, was stattdessen geht: Link selbst �
 
 Echter Spam gehört nicht abgemeldet, sondern gelöscht: Ein Abmeldeklick bestätigt dem Spammer nur, dass deine Adresse aktiv ist. mailsweep verweigert das automatische Abmelden bei ungültiger oder fremder Signatur.
 
+### Spamfilter (optional)
+
+Für Spam ohne Abmeldelink kann mailsweep jede neue Mail von einem lokalen Rspamd bewerten lassen. Einschalten in der Env-Datei (bei Komodo im Feld *Environment*):
+
+```
+COMPOSE_PROFILES=spam
+SPAM_FILTER=true
+```
+
+Danach neu deployen. `COMPOSE_PROFILES=spam` startet den Container `mailsweep-rspamd` mit, `SPAM_FILTER` schaltet die Bewertung ein (auch unter Einstellungen änderbar).
+
+- Bewertet werden Mails der letzten 30 Tage, pro Sync höchstens 300. Dafür lädt mailsweep die ersten 512 KB jeder Mail per IMAP, ohne sie als gelesen zu markieren. Gespeichert werden nur Score und Regelnamen, nie der Inhalt.
+- Rspamd hat keinen Internetzugang (Docker-Netz `internal`) und fragt keine Blocklisten oder sonstigen Dienste ab. Details und was das für die Erkennung bedeutet: `rspamd/README.md`.
+- In der Liste erscheinen die Spalte **Spam**, der Filter „nur Spam-Verdacht“ und der Knopf **Spam-Verdacht löschen**. Er verschiebt alle Mails ab der Schwelle (Standard 6) in den Papierkorb, nach einer Vorschau. Ausgeblendete Absender bleiben unangetastet.
+- Ist Rspamd nicht erreichbar, läuft der Sync trotzdem, oben steht dann ein Hinweis.
+
 ## Konfiguration
 
 Die meisten Optionen lassen sich im Tab **Einstellungen** ändern, ohne Neu-Deploy (ab 1.2.0). Werte aus der App überschreiben die Env-Datei. Zugangsdaten und UI-Passwort stehen nur in der Env-Datei `.env` (bei Komodo im Stack-Feld *Environment*, Passwörter als Secret-Variablen).
@@ -127,6 +144,9 @@ Alle Optionen stehen kommentiert in `mailsweep.env.example`. Die wichtigsten:
 | `DRY_RUN` | `false` | Nur protokollieren, nichts ausführen |
 | `ALLOW_MAILTO_UNSUBSCRIBE` | `true` | Abmelde-Mails über `smtp.mail.me.com` senden |
 | `UNSUB_FALLBACK_DNS` | `9.9.9.9` | Ausweich-DNS, falls dein DNS-Filter eine Abmelde-Domain blockt; nur auf Klick, leer = aus |
+| `SPAM_FILTER` | `false` | Spam-Bewertung mit lokalem Rspamd; braucht zusätzlich `COMPOSE_PROFILES=spam` |
+| `SPAM_THRESHOLD` | `6` | Ab diesem Rspamd-Score gilt eine Mail als Spam-Verdacht |
+| `SPAM_MAX_AGE_DAYS` / `SPAM_PER_SYNC` / `SPAM_MAX_KB` | `30` / `300` / `512` | Welche Mails bewertet werden und wie viel pro Sync und Mail geladen wird |
 | `TRUSTED_AUTHSERV_IDS` | `icloud.com` | Mailserver, deren `Authentication-Results` für die DKIM-Spalte zählen (Suffix-Vergleich) |
 | `FETCH_BATCH` | `250` | Header pro IMAP-Abruf; bei Timeouts verkleinern |
 | `UI_USER` / `UI_PASSWORD` | `admin` / leer | Basic-Auth der Weboberfläche |
@@ -148,6 +168,7 @@ Die Datenbank liegt im Volume `mailsweep-data`. Löschen des Volumes setzt alles
 ```bash
 python tests/test_net.py   # ohne Mailserver: DNS-Sperren, Ausweich-DNS, IP-Pinning mit TLS
 python tests/test_parse.py # ohne Mailserver: DKIM-Ergebnis aus Authentication-Results
+python tests/test_spam.py  # Spamfilter gegen Dovecot mit Fake-Rspamd; RSPAMD_URL=http://127.0.0.1:11333 für einen echten
 python tests/seed.py 127.0.0.1 10143 test@icloud.test geheim /tmp/key.json
 python tests/test_e2e.py /tmp      # erwartet key.json im angegebenen Ordner
 ```

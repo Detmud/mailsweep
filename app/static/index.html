@@ -55,12 +55,16 @@
         <option value="size">Größter Speicher</option>
         <option value="recent">Zuletzt aktiv</option>
         <option value="name">Alphabetisch</option>
+        <option value="spam" class="spam-only">Spam-Score</option>
       </select>
       <select id="folder" aria-label="Ordner"><option value="">Alle Ordner</option></select>
       <label class="chk"><input type="checkbox" id="onlyUnsub"> nur mit Abmeldelink</label>
       <label class="chk"><input type="checkbox" id="hideUnsubscribed"> abgemeldete ausblenden</label>
       <label class="chk"><input type="checkbox" id="showKept"> ausgeblendete zeigen</label>
+      <label class="chk spam-only"><input type="checkbox" id="onlySpam"> nur Spam-Verdacht</label>
+      <button class="btn sm danger spam-only" id="spamTrashBtn" type="button">Spam-Verdacht löschen</button>
     </div>
+    <p class="hint warn hidden" id="spamHint"></p>
 
     <div class="bulk hidden" id="bulk">
       <span id="bulkCount"></span>
@@ -84,6 +88,7 @@
             <th class="hide-m">Abmelden per</th>
             <th class="hide-s">Status</th>
             <th class="hide-m">DKIM</th>
+            <th class="hide-m spam-only" title="Höchster Rspamd-Score der Mails dieses Absenders">Spam</th>
             <th class="c-act">Aktionen</th>
           </tr>
         </thead>
