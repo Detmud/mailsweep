@@ -65,6 +65,14 @@ class Settings:
     spam_max_age_days: int = field(default_factory=lambda: int(_env("SPAM_MAX_AGE_DAYS", "30")))
     spam_per_sync: int = field(default_factory=lambda: int(_env("SPAM_PER_SYNC", "300")))
     spam_max_kb: int = field(default_factory=lambda: int(_env("SPAM_MAX_KB", "512")))
+    # Anlernen (#12): Rspamd-Controller im internen Netz, nur mit Passwort. Ohne RSPAMD_PASSWORD kein Anlernen.
+    rspamd_controller_url: str = field(default_factory=lambda: _env("RSPAMD_CONTROLLER_URL", "http://rspamd:11334") or "")
+    rspamd_password: str = field(default_factory=lambda: _env("RSPAMD_PASSWORD", "") or "")
+    spam_learn: bool = field(default_factory=lambda: _bool("SPAM_LEARN", True))
+    spam_learn_max: int = field(default_factory=lambda: int(_env("SPAM_LEARN_MAX", "100")))
+    # Score-Regel (#12): Mails ab spam_auto_score automatisch in den Papierkorb, standardmäßig aus
+    spam_auto_trash: bool = field(default_factory=lambda: _bool("SPAM_AUTO_TRASH", False))
+    spam_auto_score: int = field(default_factory=lambda: int(_env("SPAM_AUTO_SCORE", "15")))
 
     data_dir: str = field(default_factory=lambda: _env("DATA_DIR", "/data") or "/data")
     ui_user: str = field(default_factory=lambda: _env("UI_USER", "admin") or "admin")
@@ -112,6 +120,16 @@ EDITABLE: dict[str, dict] = {
                           "help": "Nur jüngere Mails werden bewertet. Jede Bewertung lädt die Mail vom Server."},
     "spam_per_sync": {"type": "int", "min": 10, "max": 5000, "label": "Spam: Bewertungen pro Sync",
                       "help": "Begrenzt den IMAP-Verkehr. Der Rest folgt beim nächsten Sync."},
+    "spam_learn": {"type": "bool", "label": "Spam: anlernen (Bayes)",
+                   "help": "„Spam melden“ und „Spam-Verdacht löschen“ lernen die Mails als Spam an, ausgeblendete "
+                           "Absender als Ham. Braucht RSPAMD_PASSWORD in der Env-Datei. Wirkt erst ab je 200 "
+                           "angelernten Mails pro Klasse."},
+    "spam_auto_trash": {"type": "bool", "label": "Spam: automatisch löschen",
+                        "help": "Nach jedem Sync wandern Mails ab der Auto-Schwelle in den Papierkorb (30 Tage "
+                                "wiederherstellbar). Ausgeblendete Absender bleiben unangetastet. Erst einschalten, "
+                                "wenn die Scores eine Weile gepasst haben."},
+    "spam_auto_score": {"type": "int", "min": 6, "max": 100, "label": "Spam: Auto-Schwelle (Score)",
+                        "help": "Ab diesem Score löscht die Regel automatisch. Deutlich über der normalen Schwelle wählen."},
     "fetch_batch": {"type": "int", "min": 10, "max": 1000, "label": "Header pro Abruf",
                     "help": "Bei Timeouts verkleinern."},
 }

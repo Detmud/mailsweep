@@ -105,3 +105,94 @@ def score_pending(conn: Imap, progress=None) -> int:
                     progress(done, len(rows))
     log.info("Spamfilter: %d Mails bewertet", done)
     return done
+
+
+# --------------------------------------------------------------------------
+# Anlernen (#12): Bayes in Rspamd, Daten in Redis. Gelernt wird über den Rspamd-Controller,
+# der nur im internen Docker-Netz lauscht und ein Passwort verlangt.
+# --------------------------------------------------------------------------
+
+def learning_enabled() -> bool:
+    return bool(settings.spam_filter and settings.spam_learn and settings.rspamd_password)
+
+
+def learn(client: httpx.Client, raw: bytes, kind: str) -> str:
+    """Lernt eine Mail als 'spam' oder 'ham' an. Gibt 'ok', 'known' (schon so gelernt) oder 'skip'
+    (zu wenig Text für Bayes) zurück, wirft SpamError bei allem anderen."""
+    url = settings.rspamd_controller_url.rstrip("/") + ("/learnspam" if kind == "spam" else "/learnham")
+    try:
+        r = client.post(url, content=raw, headers={"Password": settings.rspamd_password})
+    except httpx.HTTPError as e:
+        raise SpamError(f"Rspamd-Controller unter {settings.rspamd_controller_url} nicht erreichbar: {e}") from None
+    if r.status_code == 200:
+        return "ok"
+    if r.status_code == 208:
+        return "known"
+    if r.status_code == 204:
+        return "skip"
+    if r.status_code in (401, 403):
+        raise SpamError("Rspamd-Controller lehnt das Passwort ab. RSPAMD_PASSWORD gesetzt und "
+                        "Rspamd danach neu gestartet?")
+    try:
+        detail = r.json().get("error") or r.text
+    except ValueError:
+        detail = r.text
+    raise SpamError(f"Anlernen fehlgeschlagen: HTTP {r.status_code} {detail[:200]}")
+
+
+def learn_messages(conn: Imap, rows: list[tuple[str, int]], kind: str) -> dict:
+    """Holt die Mails (folder, uid) per BODY.PEEK und lernt sie als kind an. Merkt sich das Ergebnis
+    in messages.spam_learned und zählt in meta mit. Wirft SpamError, wenn Rspamd nicht mitspielt."""
+    counts = {"ok": 0, "known": 0, "skip": 0, "missing": 0}
+    if not rows:
+        return counts
+    by_folder: dict[str, list[int]] = defaultdict(list)
+    for folder, uid in rows:
+        by_folder[folder].append(uid)
+    max_bytes = max(16, settings.spam_max_kb) * 1024
+    with _client() as client:
+        for folder, uids in by_folder.items():
+            for chunk in chunked(uids, FETCH_CHUNK):
+                bodies = conn.fetch_partial(folder, chunk, max_bytes)
+                marks = []
+                for uid in chunk:
+                    raw = bodies.get(uid)
+                    if raw is None:
+                        counts["missing"] += 1
+                        continue
+                    res = learn(client, raw, kind)
+                    counts[res] += 1
+                    marks.append((kind if res != "skip" else "skip", folder, uid))
+                with db.connect() as con:
+                    con.executemany("UPDATE messages SET spam_learned=? WHERE folder=? AND uid=?", marks)
+                    db.add_counter(con, f"learned_{kind}", sum(1 for m in marks if m[0] == kind))
+    log.info("Anlernen als %s: %s", kind, counts)
+    return counts
+
+
+def newest(con, by_folder: dict[str, list[int]], limit: int) -> list[tuple[str, int]]:
+    """Die neuesten `limit` Mails aus by_folder, die noch nicht angelernt sind."""
+    rows = []
+    for folder, uids in by_folder.items():
+        for chunk in chunked(sorted(uids), 900):
+            rows += con.execute(
+                f"SELECT folder, uid, date FROM messages WHERE folder=? AND spam_learned='' "
+                f"AND uid IN ({','.join('?' * len(chunk))})",
+                (folder, *chunk),
+            ).fetchall()
+    rows.sort(key=lambda r: -r["date"])
+    return [(r["folder"], r["uid"]) for r in rows[:limit]]
+
+
+def ham_pending(con, limit: int) -> list[tuple[str, int]]:
+    """Noch nicht angelernte Mails ausgeblendeter Absender aus dem Bewertungszeitraum, neueste zuerst."""
+    cutoff = int(time.time()) - settings.spam_max_age_days * 86400
+    folders = list(settings.folders) or [""]
+    return [(r["folder"], r["uid"]) for r in con.execute(
+        f"SELECT folder, uid FROM messages m WHERE spam_learned='' AND date >= ? "
+        f"AND folder IN ({','.join('?' * len(folders))}) "
+        "AND EXISTS (SELECT 1 FROM sender_state s WHERE s.kept=1 AND "
+        "((s.grp='addr' AND s.key=m.from_addr) OR (s.grp='domain' AND s.key=m.org_domain))) "
+        "ORDER BY date DESC LIMIT ?",
+        (cutoff, *folders, limit),
+    )]
