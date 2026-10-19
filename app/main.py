@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -93,6 +93,10 @@ async def security_headers(request: Request, call_next):
         "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; "
         "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
     )
+    # Seite und Assets immer per ETag nachfragen lassen, sonst hält der Browser nach einem Update
+    # alte Skripte fest (#18). Unveränderte Dateien kommen als 304 ohne Inhalt.
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
     return resp
 
 
@@ -114,9 +118,21 @@ def healthz():
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
+def _index_html() -> str:
+    """index.html mit Version an den Asset-URLs: Jede neue Version lädt neue Dateien (#18)."""
+    with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
+        html = f.read()
+    for asset in ("app.js", "style.css"):
+        html = html.replace(f'"/static/{asset}"', f'"/static/{asset}?v={__version__}"')
+    return html
+
+
+INDEX_HTML = _index_html()
+
+
 @app.get("/", dependencies=[Depends(auth)], include_in_schema=False)
 def index():
-    return FileResponse(os.path.join(STATIC, "index.html"))
+    return HTMLResponse(INDEX_HTML)
 
 
 # --------------------------------------------------------------------------
