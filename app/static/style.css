@@ -80,7 +80,8 @@ button, input, select { font: inherit; color: inherit; }
 .stats .lbl { font-size: 12px; color: var(--ink-2); }
 
 /* Tabs */
-.tabs { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.tabs { display: flex; gap: 4px; padding: 0 24px; border-bottom: 1px solid var(--line); background: var(--surface); overflow-x: auto; scrollbar-width: none; }
+.tabs .tab { flex: none; }
 .tab {
   border: 0; background: none; padding: 12px 10px; cursor: pointer; color: var(--ink-2);
   border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 550;
@@ -131,7 +132,7 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
   border: 1px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius);
   position: sticky; top: 64px; z-index: 4;
 }
-#bulkCount { font-weight: 600; margin-right: 6px; }
+#bulkCount, #mbulkCount { font-weight: 600; margin-right: 6px; }
 
 /* Tabelle */
 .tablewrap { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow-x: auto; }
@@ -266,3 +267,7 @@ dialog a { color: var(--accent); word-break: break-all; }
   .who .n, .who .a { max-width: 26ch; }
   .act button:not(.pri) { display: none; }
 }
+
+/* Tab Mails (#16) */
+.who.static { cursor: default; }
+.who.static:hover .n { color: inherit; }
