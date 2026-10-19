@@ -143,6 +143,12 @@ def api_status():
             ).fetchone()
             spam_info.update(scored=row[0], suspect=row[1],
                              pending=con.execute(f"SELECT COUNT(*) FROM messages WHERE {cond}", params).fetchone()[0])
+            spam_info["learn"] = {
+                "enabled": spam.learning_enabled(), "configured": bool(settings.rspamd_password),
+                "spam": db.get_counter(con, "learned_spam"), "ham": db.get_counter(con, "learned_ham"),
+                "min_learns": 200, "error": jobs.status.learn_error,
+            }
+            spam_info["auto"] = {"enabled": settings.spam_auto_trash, "score": settings.spam_auto_score}
     return {
         "version": __version__,
         "account": settings.imap_user,
@@ -449,7 +455,7 @@ async def api_spam_check():
 class ActionReq(BaseModel):
     group: Literal["addr", "domain"] = "addr"
     keys: list[str] = Field(min_length=1, max_length=2000)
-    action: Literal["archive", "trash", "move", "keep", "unkeep"]
+    action: Literal["archive", "trash", "move", "keep", "unkeep", "spam"]
     target_folder: str = ""
 
 
@@ -598,6 +604,8 @@ async def api_settings_save(req: SettingsReq):
     if "dry_run" in changed and not settings.dry_run:
         db.clear_dry_traces()
         log.warning("DRY_RUN ausgeschaltet: Aktionen werden ab jetzt wirklich ausgeführt.")
+    if {"spam_filter", "spam_learn"} & changed.keys():
+        jobs.status.learn_error = ""
     if "spam_filter" in changed:
         jobs.status.spam_error = ""
         if settings.spam_filter and not jobs.status.running:
