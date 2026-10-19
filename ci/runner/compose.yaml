@@ -1,0 +1,24 @@
+# Forgejo-Runner für mailsweep (#11). Gedacht für einen eigenen, unprivilegierten LXC mit Docker,
+# NICHT für die Komodo-VM (siehe README.md, Abschnitt "Wo der Runner läuft").
+#
+#   mkdir -p data && cp config.example.yml data/config.yml   # uuid und token eintragen
+#   DOCKER_GID=$(stat -c %g /var/run/docker.sock) docker compose up -d
+services:
+  runner:
+    image: data.forgejo.org/forgejo/runner:13.1.0
+    container_name: forgejo-runner
+    user: "1000:1000"
+    group_add:
+      - "${DOCKER_GID:-999}"      # Gruppe des Docker-Sockets auf diesem Host
+    command: forgejo-runner daemon --config /data/config.yml
+    restart: unless-stopped
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock   # nur der Runner, Jobs bekommen den Socket nicht
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

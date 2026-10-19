@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Alle Tests in einem Rutsch, für den Forgejo-Runner (#11) und lokal.
+#
+# Braucht: root, python3 (>= 3.12) mit venv, dovecot-imapd, openssl, optional rspamd.
+# Startet einen eigenen Dovecot auf 127.0.0.1:10143 mit frischem Postfach in einem
+# Temp-Verzeichnis. Port 10143 und 11333 müssen dafür frei sein.
+# Mit rspamd im PATH läuft test_spam.py zusätzlich gegen einen echten Rspamd mit der
+# Konfiguration aus rspamd/, ohne /etc/rspamd anzufassen.
+#
+# Aufruf: bash tests/ci.sh     (aus dem Repo-Wurzelverzeichnis oder von überall)
+#   CI_SKIP_RSPAMD=1           echten Rspamd auslassen
+#   CI_VENV=/pfad              vorhandenes venv benutzen statt ein neues anzulegen
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+WORK=$(mktemp -d)
+PIDS=()
+cleanup() {
+  local rc=$? p f
+  if [ "$rc" != 0 ]; then  # bei Fehlern die Dienst-Logs zeigen
+    for f in "$WORK/dc/dovecot.log" "$WORK/rspamd/rspamd.log"; do
+      [ -f "$f" ] && { echo "--- $f"; tail -30 "$f"; }
+    done
+  fi
+  [ -f "$WORK/dc/run/master.pid" ] && PIDS+=("$(cat "$WORK/dc/run/master.pid")")
+  for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
+  for _ in $(seq 1 20); do  # bis zu 10 s warten, bis Dovecot und Rspamd weg sind
+    local alive=0
+    for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill -0 "$p" 2>/dev/null && alive=1; done
+    [ "$alive" = 0 ] && break
+    sleep 0.5
+  done
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+step() { printf '\n=== %s ===\n' "$*"; }
+
+port_open() {
+  python3 - "$1" <<'EOF'
+import socket, sys
+s = socket.socket(); s.settimeout(0.5)
+sys.exit(0 if s.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)
+EOF
+}
+
+wait_port() {  # wait_port PORT NAME
+  for _ in $(seq 1 60); do port_open "$1" && return 0; sleep 0.5; done
+  echo "$2 auf Port $1 nicht erreichbar" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------- Python
+step "Python-Umgebung"
+if [ -n "${CI_VENV:-}" ]; then
+  PY="$CI_VENV/bin/python"
+else
+  python3 -m venv "$WORK/venv"
+  PY="$WORK/venv/bin/python"
+  "$PY" -m pip install -q --disable-pip-version-check -r requirements.txt cryptography ruff
+fi
+"$PY" --version
+
+# ---------------------------------------------------------------- Lint
+step "ruff (Fehler, keine Stilfragen)"
+"$PY" -m ruff check --select F,E9 app tests
+
+# ---------------------------------------------------------------- ohne Mailserver
+step "test_parse.py"
+"$PY" tests/test_parse.py
+step "test_net.py"
+"$PY" tests/test_net.py
+
+# ---------------------------------------------------------------- Dovecot
+for p in 10143 11333; do
+  if port_open $p; then echo "Port $p ist schon belegt, bitte den laufenden Test-Dienst stoppen." >&2; exit 1; fi
+done
+
+step "Dovecot starten"
+id vmail >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin vmail
+mkdir -p "$WORK/dc/run" "$WORK/dc/state" "$WORK/mail"
+chown vmail:vmail "$WORK/mail"
+chmod 755 "$WORK"
+echo 'test@icloud.test:{PLAIN}geheim' > "$WORK/dc/users"
+sed -e "s|@WORK@|$WORK|g" tests/dovecot.conf > "$WORK/dc/dovecot.conf"
+/usr/sbin/dovecot -c "$WORK/dc/dovecot.conf"
+wait_port 10143 Dovecot
+
+step "seed.py"
+"$PY" tests/seed.py 127.0.0.1 10143 test@icloud.test geheim "$WORK/key.json"
+
+step "test_e2e.py"
+"$PY" tests/test_e2e.py "$WORK"
+
+step "test_spam.py (Fake-Rspamd)"
+"$PY" tests/test_spam.py
+
+# ---------------------------------------------------------------- echter Rspamd
+if [ -z "${CI_SKIP_RSPAMD:-}" ] && command -v rspamd >/dev/null; then
+  step "Rspamd mit rspamd/ starten"
+  RS="$WORK/rspamd"
+  mkdir -p "$RS/conf" "$RS/db" "$RS/run"
+  cp -r rspamd/local.d rspamd/override.d "$RS/conf/"
+  RUSER=_rspamd; id "$RUSER" >/dev/null 2>&1 || RUSER=rspamd
+  chown -R "$RUSER" "$RS/db" "$RS/run"
+  VARS=("--var=LOCAL_CONFDIR=$RS/conf" "--var=DBDIR=$RS/db" "--var=RUNDIR=$RS/run")
+  rspamadm "${VARS[@]}" configtest
+  rspamd -f -u "$RUSER" -g "$RUSER" "${VARS[@]}" > "$RS/rspamd.log" 2>&1 &
+  PIDS+=($!)
+  wait_port 11333 Rspamd || { tail -50 "$RS/rspamd.log"; exit 1; }
+  step "test_spam.py (echter Rspamd)"
+  RSPAMD_URL=http://127.0.0.1:11333 "$PY" tests/test_spam.py
+else
+  echo "Rspamd nicht installiert oder ausgelassen, nur Fake-Rspamd getestet."
+fi
+
+step "ALLES GRÜN"

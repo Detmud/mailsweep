@@ -174,3 +174,13 @@ python tests/test_e2e.py /tmp      # erwartet key.json im angegebenen Ordner
 ```
 
 Der Test braucht einen Dovecot mit Klartext-Login auf Port 10143 und den Ordnern `Archive` (`\Archive`) und `Deleted Messages` (`\Trash`).
+
+Alles auf einmal, mit eigenem Dovecot aus `tests/dovecot.conf` und frischem Postfach, dazu `ruff` und, falls `rspamd` installiert ist, der Spamtest gegen einen echten Rspamd mit der Konfiguration aus `rspamd/`:
+
+```bash
+bash tests/ci.sh   # als root; braucht python3 (3.12), python3-venv, dovecot-imapd, openssl, optional rspamd; Ports 10143 und 11333 frei
+```
+
+### CI
+
+`.forgejo/workflows/test.yml` führt `tests/ci.sh` bei jedem Pull Request und jedem Push auf `main` aus, in einem Container `ubuntu:24.04`. Der Workflow nutzt keine fremden Actions, ausgecheckt wird per `git`. Damit er läuft, braucht Forgejo einen Runner mit dem Label `docker`. Einrichtung und die Sicherheitsabwägung dazu: [ci/runner/README.md](ci/runner/README.md).
